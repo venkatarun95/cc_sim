@@ -1,0 +1,12 @@
+[package]
+name = "cc_sim"
+version = "0.1.0"
+authors = ["Venkat Arun <venkatar@mit.edu>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+fnv = "1.0"
+failure = "0.1"
+priority-queue = "0.6"
