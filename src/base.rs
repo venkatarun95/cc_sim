@@ -11,11 +11,28 @@ use std::rc::Rc;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Time(u64);
 
+/// TCP sequence number (in packets)
+pub type SeqNum = u64;
+
 impl std::ops::Add for Time {
     type Output = Self;
 
     fn add(self, other: Self) -> Self {
         Time(*self + *other)
+    }
+}
+
+impl std::ops::Sub for Time {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self {
+        if self < other {
+            panic!(
+                "Tried to subtract a smaller time ({:?}) from a larger one ({:?})",
+                self, other
+            );
+        }
+        Time(*self - *other)
     }
 }
 
@@ -66,12 +83,17 @@ impl PktIdAlloc {
 
 #[derive(Debug, Hash)]
 pub enum PacketType {
-    Data,
+    Data {
+        /// Sequence number of the packet
+        seq_num: SeqNum,
+    },
     Ack {
         /// Time when the packet being acked was sent
         sent_time: Time,
         /// UID for the packet being acked
-        ack_uid: u64,
+        ack_uid: SeqNum,
+        /// Sequence number of the packet being acked
+        ack_seq: SeqNum,
     },
 }
 
