@@ -14,6 +14,13 @@ pub struct Time(u64);
 /// TCP sequence number (in packets)
 pub type SeqNum = u64;
 
+/// ID for a NetObject, assigned by the scheduler
+pub type NetObjId = usize;
+
+/// Address of a destination
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Addr(u64);
+
 impl std::ops::Add for Time {
     type Output = Self;
 
@@ -49,38 +56,6 @@ impl Deref for Time {
     }
 }
 
-/// Address of a destination
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct Addr(u64);
-
-/// Allocates new addresses. There should only be one globally
-#[derive(Default)]
-pub struct AddrAlloc {
-    num_addr: u64,
-}
-
-impl AddrAlloc {
-    pub fn next_addr(&mut self) -> Addr {
-        let res = self.num_addr;
-        self.num_addr += 1;
-        Addr(res)
-    }
-}
-
-/// Allocates unique ids for packets. There should only be one such global object for correctness
-#[derive(Default)]
-pub struct PktIdAlloc {
-    num_pkts: u64,
-}
-
-impl PktIdAlloc {
-    pub fn next_uid(&mut self) -> u64 {
-        let res = self.num_pkts;
-        self.num_pkts += 1;
-        res
-    }
-}
-
 #[derive(Debug, Hash)]
 pub enum PacketType {
     Data {
@@ -110,20 +85,24 @@ pub struct Packet {
     pub ptype: PacketType,
 }
 
+/// An object in the network that can receive packets and events. They take refcells of
+/// themselves so they can pass it to schedule events for themselves.
 pub trait NetObject {
-    /// Push a new packet into this object. Note, most types will have to implement interior
-    /// mutability
-    fn push(self: Rc<Self>, pkt: Rc<Packet>) -> Result<(), Error>;
+    /// Push a new packet into this object.
+    fn push(
+        &mut self,
+        self_ref: Rc<RefCell<Box<dyn NetObject>>>,
+        pkt: Rc<Packet>,
+    ) -> Result<(), Error>;
     /// Callback for when a scheduled event occurs. 'uid' is the one specified when scheduling the
-    /// event. It may be used to identify and keep track of events. Note, most types will have to
-    /// implement interior mutability.
-    fn event(self: Rc<Self>, uid: u64) -> Result<(), Error>;
+    /// event. It may be used to identify and keep track of events.
+    fn event(&mut self, self_ref: Rc<RefCell<Box<dyn NetObject>>>, uid: u64) -> Result<(), Error>;
 }
 
 /// Helper struct for scheduler. Contains all events scheduled for a given time
 struct Event {
     /// All the events that have been scheduled for this time. Format: (uid, obj)
-    events: Vec<(u64, Rc<dyn NetObject>)>,
+    events: Vec<(u64, Rc<RefCell<Box<dyn NetObject>>>)>,
     when: Time,
 }
 
@@ -148,39 +127,49 @@ impl PartialEq for Event {
 impl Eq for Event {}
 
 /// A calendar scheduler for a discrete event simulator. NetObjects may provide an event id that
-/// they internally keep track of to identify events.
+/// they internally keep track of to identify events. This is the central object fot the simulator
 pub struct Scheduler {
     /// Current time in simulation
-    now: RefCell<Time>,
+    now: Time,
     /// List of events in the future
-    events: RefCell<BinaryHeap<Event>>,
+    events: BinaryHeap<Event>,
     /// Same as 'events', but searchable by time
-    event_times: RefCell<FnvHashMap<Time, Rc<RefCell<Event>>>>,
+    event_times: FnvHashMap<Time, Event>,
+    /// The set of all objects that can schedule events on this scheduler
+    objs: Vec<Box<dyn NetObject>>,
+    /// For uniquely allocating addresses
+    num_addr: u64,
+    /// For uniquely allocating packet ids
+    num_pkts: u64,
 }
 
 impl Default for Scheduler {
     fn default() -> Self {
         Self {
-            now: RefCell::new(Time(0)),
+            now: Time(0),
             events: Default::default(),
             event_times: Default::default(),
+            objs: Default::default(),
+            num_addr: 0,
+            num_pkts: 0,
         }
     }
 }
 
 impl Scheduler {
-    /// NetObjects may call this function to schedule events in the future
+    /// NetObjects may call this function to schedule events in the future. Callers may use `uid`
+    /// to identify events. The same uid will be used in the callback.
     pub fn schedule(
-        self: Rc<Self>,
+        &mut self,
         uid: u64,
         when: Time,
-        obj: Rc<dyn NetObject>,
+        obj: Rc<RefCell<Box<dyn NetObject>>>,
     ) -> Result<(), Error> {
         // Check if event needs to be scheduled is in the past or right now. We cannot handle
         // events that happen right now, since simulate takes an iterator to 'Event::events', which
         // won't update when things are pushed into the vector. In such cases, callers should just
         // do the event instead of scheduling it.
-        if when <= *self.now.borrow() {
+        if when <= self.now {
             return Err(format_err!(
                 "Event to be scheduled at time {:?}, which is in the past. Current time is {:?}.",
                 when,
@@ -189,10 +178,10 @@ impl Scheduler {
         }
 
         // If an event has already been scheduled for this time, add to the same event
-        if let Some(event) = self.event_times.borrow_mut().get_mut(&when) {
-            event.borrow_mut().events.push((uid, obj))
+        if let Some(event) = self.event_times.get_mut(&when) {
+            event.events.push((uid, obj))
         } else {
-            self.events.borrow_mut().push(Event {
+            self.events.push(Event {
                 events: vec![(uid, obj)],
                 when,
             })
@@ -201,18 +190,48 @@ impl Scheduler {
         Ok(())
     }
 
+    /// Get the object ID that will be allocated to the next object that will be registered
+    pub fn next_obj_id(&self) -> NetObjId {
+        self.objs.len()
+    }
+
+    /// Register an object for this scheduler. Only registered objects can register events. Returns
+    /// a unique identifier that can be used to refer to this object later.
+    pub fn register_obj(&mut self, obj: Box<dyn NetObject>) -> NetObjId {
+        self.objs.push(obj);
+        self.objs.len() - 1
+    }
+
+    /*pub fn get_net_obj(&mut self, obj_id: NetObjId) -> Box<dyn NetObject> {
+        self.objs[obj_id]
+    }*/
+
+    /// Allocate a new globally-unique address
+    pub fn next_addr(&mut self) -> Addr {
+        let res = self.num_addr;
+        self.num_addr += 1;
+        Addr(res)
+    }
+
+    pub fn next_pkt_uid(&mut self) -> u64 {
+        let res = self.num_pkts;
+        self.num_pkts += 1;
+        res
+    }
+
     /// Returns the current time in the simulation
     pub fn now(&self) -> Time {
-        *self.now.borrow()
+        self.now
     }
 
     /// Start simulation. Loop till simulation ends
-    pub fn simulate(self: Rc<Self>) -> Result<(), Error> {
-        while let Some(next) = self.events.borrow_mut().pop() {
-            assert!(next.when > *self.now.borrow());
-            *self.now.borrow_mut() = next.when;
+    pub fn simulate(&mut self) -> Result<(), Error> {
+        while let Some(next) = self.events.pop() {
+            assert!(next.when > self.now);
+            self.now = next.when;
             for (uid, obj) in next.events {
-                obj.event(uid)?;
+                //self.objs[obj_id].event(uid);
+                RefCell::borrow_mut(&obj.clone()).event(obj, uid)?;
             }
         }
         Ok(())
