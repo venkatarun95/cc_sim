@@ -16,10 +16,9 @@ pub struct Router {
     /// Address of this router
     addr: Addr,
     /// A list of ports this router can forward on
-    ports: Vec<Rc<RefCell<Box<dyn NetObject>>>>,
+    ports: Vec<NetObjId>,
     /// Routing table: a map from address to port to forward on
     routes: FnvHashMap<Addr, usize>,
-    sched: Rc<RefCell<Scheduler>>,
 }
 
 impl Router {
@@ -33,18 +32,17 @@ impl Router {
         }))
     }*/
 
-    pub fn new(addr: Addr, sched: Rc<RefCell<Scheduler>>) -> Self {
+    pub fn new(addr: Addr) -> Self {
         Self {
             addr,
             ports: Default::default(),
             routes: Default::default(),
-            sched,
         }
     }
 
     /// Adds the given object to this routers set of ports. Returns a port id that may be used to add routes
-    pub fn add_port(&mut self, net_obj: Rc<RefCell<Box<dyn NetObject>>>) -> usize {
-        self.ports.push(net_obj);
+    pub fn add_port(&mut self, obj_id: NetObjId) -> usize {
+        self.ports.push(obj_id);
         self.ports.len() - 1
     }
 
@@ -54,19 +52,21 @@ impl Router {
     }
 }
 
-impl NetObject for Router {
+impl NetObj for Router {
     fn push(
         &mut self,
-        self_ref: Rc<RefCell<Box<dyn NetObject>>>,
+        obj_id: NetObjId,
+        _from: NetObjId,
+        now: Time,
         pkt: Rc<Packet>,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         if pkt.dest == self.addr {
             // Weird, let's just print it
             println!("Packet {:?} received at router.", pkt);
-            return Ok(());
+            return Ok(Vec::new());
         }
         if let Some(port) = self.routes.get(&pkt.dest) {
-            RefCell::borrow_mut(&self.ports[*port]).push(self.ports[*port].clone(), pkt)
+            Ok(vec![(now, self.ports[*port], Action::Push(pkt))])
         } else {
             Err(format_err!(
                 "Packet's destination address '{:?}' does not exist in routing table",
@@ -77,9 +77,11 @@ impl NetObject for Router {
 
     fn event(
         &mut self,
-        _self_ref: Rc<RefCell<Box<dyn NetObject>>>,
-        _uid: u64,
-    ) -> Result<(), Error> {
+        obj_id: NetObjId,
+        _from: NetObjId,
+        now: Time,
+        uid: u64,
+    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         unreachable!()
     }
 }
@@ -90,40 +92,35 @@ pub struct Link {
     /// Maximum number of packets that can be buffered
     bufsize: usize,
     /// The next hop which will receve packets
-    next: Rc<RefCell<Box<dyn NetObject>>>,
+    next: NetObjId,
     /// The packets currently in the link (either queued or being served)
     buffer: VecDeque<Rc<Packet>>,
-    /// Scheduler we will use to schedule future events
-    sched: Rc<RefCell<Scheduler>>,
 }
 
 impl Link {
-    pub fn new(
-        rate: u64,
-        bufsize: usize,
-        next: Rc<RefCell<Box<dyn NetObject>>>,
-        sched: Rc<RefCell<Scheduler>>,
-    ) -> Self {
+    pub fn new(rate: u64, bufsize: usize, next: NetObjId) -> Self {
         Self {
             rate,
             bufsize,
             next,
             buffer: Default::default(),
-            sched,
         }
     }
 }
 
-impl NetObject for Link {
+impl NetObj for Link {
     fn push(
         &mut self,
-        self_ref: Rc<RefCell<Box<dyn NetObject>>>,
+        obj_id: NetObjId,
+        from: NetObjId,
+        now: Time,
         pkt: Rc<Packet>,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
+        assert_eq!(obj_id, from);
         // If buffer already full, drop packet
         if self.buffer.len() >= self.bufsize {
             assert_eq!(self.buffer.len(), self.bufsize);
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         // Add packet to buffer
@@ -131,32 +128,32 @@ impl NetObject for Link {
 
         // If buffer was previously empty, schedule an event to deque it. Else such an event would
         // already have been scheduled
-        let send_time =
-            Time::from_micros(*self.sched.borrow().now() + 1_000_000 * pkt.size / self.rate);
-        (*self.sched)
-            .borrow_mut()
-            .schedule(0, send_time, self_ref)?;
-        Ok(())
+        let send_time = Time::from_micros(*now + 1_000_000 * pkt.size / self.rate);
+        Ok(vec![(send_time, obj_id, Action::Event(0))])
     }
 
-    fn event(&mut self, self_ref: Rc<RefCell<Box<dyn NetObject>>>, _uid: u64) -> Result<(), Error> {
+    fn event(
+        &mut self,
+        obj_id: NetObjId,
+        from: NetObjId,
+        now: Time,
+        uid: u64,
+    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         assert!(!self.buffer.len() != 0);
         // Send packet to next hop
-        RefCell::borrow_mut(&self.next).push(
-            self.next.clone(),
-            self.buffer.borrow_mut().pop_front().unwrap(),
-        )?;
+        let mut res = vec![(
+            now,
+            self.next,
+            Action::Push(self.buffer.borrow_mut().pop_front().unwrap()),
+        )];
 
         // If needed, schedule for transmission of the next packet
         if self.buffer.len() != 0 {
             let size = self.buffer.front().unwrap().size;
-            let send_time =
-                Time::from_micros(*self.sched.borrow().now() + 1_000_000 * size / self.rate);
-            (*self.sched)
-                .borrow_mut()
-                .schedule(0, send_time, self_ref)?;
+            let send_time = Time::from_micros(*now + 1_000_000 * size / self.rate);
+            res.push((send_time, obj_id, Action::Event(0)))
         }
-        Ok(())
+        Ok(res)
     }
 }
 
@@ -167,13 +164,13 @@ pub struct Delay {
     /// Packets that are currently within this module
     pkts: VecDeque<Rc<Packet>>,
     /// The next hop
-    next: Box<dyn NetObject>,
+    next: Box<dyn NetObj>,
     obj_id: NetObjId,
     sched: RefCell<Scheduler>,
 }
 
 impl Delay {
-    fn new(delay: Time, next: Box<dyn NetObject>, sched: RefCell<Scheduler>) -> Box<Self> {
+    fn new(delay: Time, next: Box<dyn NetObj>, sched: RefCell<Scheduler>) -> Box<Self> {
         let sched_mut = sched.borrow_mut();
         let res = Box::new(Self {
             delay,
@@ -187,7 +184,7 @@ impl Delay {
     }
 }
 
-impl NetObject for Delay {
+impl NetObj for Delay {
     fn push(&mut self, pkt: Rc<Packet>) -> Result<(), Error> {
         self.pkts.borrow_mut().push_back(pkt);
         let deque_time = self.sched.borrow().now() + self.delay;
@@ -207,7 +204,7 @@ impl NetObject for Delay {
 /// Acks every packet it receives to the sender via the given next-hop
 pub struct Acker {
     /// The next hop over which to send all acks
-    next: Option<Box<dyn NetObject>>,
+    next: Option<Box<dyn NetObj>>,
     /// The address of this acker
     addr: Addr,
     obj_id: NetObjId,
@@ -227,12 +224,12 @@ impl Acker {
         res
     }
 
-    pub fn set_next(&mut self, next: Box<dyn NetObject>) {
+    pub fn set_next(&mut self, next: Box<dyn NetObj>) {
         self.next = Some(next);
     }
 }
 
-impl NetObject for Acker {
+impl NetObj for Acker {
     fn push(&mut self, pkt: Rc<Packet>) -> Result<(), Error> {
         // Make sure this is the intended recipient
         assert_eq!(self.addr, pkt.dest);
@@ -279,7 +276,7 @@ pub trait CongestionControl {
 /// A sender which sends a given amount of data using congestion control
 pub struct TcpSender<C: CongestionControl + 'static> {
     /// The hop on which to send packets
-    next: Option<Rc<RefCell<Box<dyn NetObject>>>>,
+    next: Option<Rc<RefCell<Box<dyn NetObj>>>>,
     /// The address of this sender
     addr: Addr,
     /// The destination to which we are communicating
@@ -299,7 +296,7 @@ pub struct TcpSender<C: CongestionControl + 'static> {
     sched: Box<Scheduler>,
 }
 
-impl<C: CongestionControl + 'static> TcpSender<C> {
+/*impl<C: CongestionControl + 'static> TcpSender<C> {
     fn tx_packet(&mut self) -> Result<(), Error> {
         let pkt = Packet {
             uid: self.sched.next_pkt_uid(),
@@ -317,7 +314,7 @@ impl<C: CongestionControl + 'static> TcpSender<C> {
     }
 }
 
-/*impl<C: CongestionControl + 'static> NetObject for TcpSender<C> {
+impl<C: CongestionControl + 'static> NetObj for TcpSender<C> {
     fn push(&mut self, pkt: Rc<Packet>) -> Result<(), Error> {
         // Must be an ack. Check this
         assert_eq!(pkt.dest, self.addr);
@@ -371,21 +368,23 @@ impl<C: CongestionControl + 'static> TcpSender<C> {
 }*/
 
 fn main() -> Result<(), Error> {
-    let sched = Rc::new(RefCell::new(Scheduler::default()));
+    let mut sched = Scheduler::default();
+
+    // Scheduler promises to allocate NetObjId in ascending order in increments of one. So we can
+    // determine the ids each object will be assigned
+    let router_id = sched.next_obj_id();
+    let link_id = router_id + 1;
 
     // Make the router
-    let mut router = Router::new(
-        RefCell::borrow_mut(&sched.clone()).next_addr(),
-        sched.clone(),
-    );
-    let router_rc = Rc::new(RefCell::new(Box::new(router) as Box<dyn NetObject>));
-    let link = Link::new(1_000_000, 100, router_rc, sched.clone());
-    let link_rc = Rc::new(RefCell::new(Box::new(router) as Box<dyn NetObject>));
-    RefCell::borrow_mut(&router_rc).add_port(link_rc);
+    let mut router = Router::new(sched.next_addr());
+    let mut link = Link::new(1_000_000, 100, router_id);
+    router.add_port(router_id);
 
-    //sched.get_net_obj(router).router.add_port(link);
+    // Register all the objects. Remember to do it in the same order as the ids
+    sched.register_obj(Box::new(router));
+    sched.register_obj(Box::new(link));
 
-    RefCell::borrow_mut(&sched).simulate()?;
+    sched.simulate()?;
 
     Ok(())
 }
