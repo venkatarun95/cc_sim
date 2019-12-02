@@ -14,12 +14,22 @@ pub struct Time(u64);
 /// TCP sequence number (in packets)
 pub type SeqNum = u64;
 
-/// ID for a NetObj, assigned by the scheduler
+/// ID for a NetObj, assigned by the scheduler.
 pub type NetObjId = usize;
 
 /// Address of a destination
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Addr(u64);
+
+/// Used to allocate fresh, uniqe sequence numbers
+pub static mut NEXT_SEQ_NUM: SeqNum = 0;
+
+pub fn get_next_pkt_seq_num() -> SeqNum {
+    unsafe {
+        NEXT_SEQ_NUM += 1;
+        NEXT_SEQ_NUM
+    }
+}
 
 impl std::ops::Add for Time {
     type Output = Self;
@@ -88,6 +98,9 @@ pub struct Packet {
 /// An object in the network that can receive packets and events. They take object ids of
 /// themselves, so it is easy to schedule events on themselves.
 pub trait NetObj {
+    /// Called when simulation starts. This is an opportunity to schedule any actions
+    fn init(&mut self, obj_id: NetObjId, now: Time)
+        -> Result<Vec<(Time, NetObjId, Action)>, Error>;
     /// Push a new packet into this object.
     fn push(
         &mut self,
@@ -108,6 +121,7 @@ pub trait NetObj {
 }
 
 /// A single action to be taken
+#[derive(Debug)]
 pub enum Action {
     /// Call `event` on the given object with the given uid
     Event(u64),
@@ -116,6 +130,7 @@ pub enum Action {
 }
 
 /// Helper struct for scheduler. Contains all events scheduled for a given time
+#[derive(Debug)]
 struct ActionSet {
     /// All the events that have been scheduled for this time along with the objects that scheduled
     /// them. 'from' indicates the object that scheduled this action. 'to' indicates the object we
@@ -187,7 +202,7 @@ impl Scheduler {
         // events that happen right now, since simulate takes an iterator to 'ActionSet::events', which
         // won't update when things are pushed into the vector. In such cases, callers should just
         // do the event instead of scheduling it.
-        if when <= self.now {
+        if when < self.now {
             return Err(format_err!(
                 "Event to be scheduled at time {:?}, which is in the past. Current time is {:?}.",
                 when,
@@ -215,15 +230,15 @@ impl Scheduler {
     }
 
     /// Register an object for this scheduler. Only registered objects can register events. Returns
-    /// a unique identifier that can be used to refer to this object later. We promise to start
-    /// from zero and allocate in increments of 1.
+    /// a unique identifier that can be used to refer to this object later. We promise to allocate
+    /// in increments of 1.
     pub fn register_obj(&mut self, obj: Box<dyn NetObj>) -> NetObjId {
         self.objs.push(obj);
         self.objs.len() - 1
     }
 
-    pub fn get_obj(&mut self, obj_id: NetObjId) -> &mut Box<dyn NetObj> {
-        &mut self.objs[obj_id]
+    pub fn get_obj(&mut self, obj_id: NetObjId) -> &mut dyn NetObj {
+        self.objs[obj_id].as_mut()
     }
 
     /// Allocate a new globally-unique address
@@ -233,12 +248,6 @@ impl Scheduler {
         Addr(res)
     }
 
-    pub fn next_pkt_uid(&mut self) -> u64 {
-        let res = self.num_pkts;
-        self.num_pkts += 1;
-        res
-    }
-
     /// Returns the current time in the simulation
     pub fn now(&self) -> Time {
         self.now
@@ -246,8 +255,26 @@ impl Scheduler {
 
     /// Start simulation. Loop till simulation ends
     pub fn simulate(&mut self) -> Result<(), Error> {
+        // We start from time 0
+        self.now = Time::from_micros(0);
+
+        // Get all the initial events that have been scheduled
+        let mut actions_to_sched = Vec::new();
+        for (obj_id, obj) in self.objs.iter_mut().enumerate() {
+            for (when, to, action) in obj.init(obj_id, self.now)? {
+                actions_to_sched.push((when, obj_id, to, action));
+            }
+        }
+        for (when, to, to1, action) in actions_to_sched {
+            self.schedule(when, to, to1, action)?;
+        }
+
         while let Some(next) = self.actions.pop() {
-            assert!(next.when > self.now);
+            // Gather all things to be scheduled next in a vec and schedle all of them together, so
+            // we can avoid having to modify `next.actions` in flight
+            let mut actions_to_sched = Vec::new();
+
+            assert!(self.now <= next.when);
             self.now = next.when;
             for (from, to, action) in next.actions {
                 // Take the given action
@@ -256,10 +283,14 @@ impl Scheduler {
                     Action::Push(pkt) => self.objs[to].push(to, from, self.now, pkt)?,
                 };
 
-                // Schedule any new actions returned from the previous actions
                 for (when, to1, action) in new_actions {
-                    self.schedule(when, to, to1, action)?;
+                    actions_to_sched.push((when, to, to1, action));
                 }
+            }
+
+            // Schedule any new actions returned in this time-step
+            for (when, to, to1, action) in actions_to_sched {
+                self.schedule(when, to, to1, action)?;
             }
         }
         Ok(())
