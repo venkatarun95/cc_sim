@@ -2,6 +2,7 @@
 
 use failure::{format_err, Error};
 use fnv::FnvHashMap;
+use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::rc::Rc;
 
@@ -124,45 +125,17 @@ pub enum Action {
     Push(Rc<Packet>),
 }
 
-/// Helper struct for scheduler. Contains all events scheduled for a given time
-#[derive(Debug)]
-struct ActionSet {
-    /// All the events that have been scheduled for this time along with the objects that scheduled
-    /// them. 'from' indicates the object that scheduled this action. 'to' indicates the object we
-    //are scheduling to. Format: (from, to, action)
-    actions: Vec<(NetObjId, NetObjId, Action)>,
-    when: Time,
-}
-
-impl Ord for ActionSet {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.when.cmp(&other.when).reverse()
-    }
-}
-
-impl PartialOrd for ActionSet {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for ActionSet {
-    fn eq(&self, other: &Self) -> bool {
-        self.when == other.when
-    }
-}
-
-impl Eq for ActionSet {}
-
 /// A calendar scheduler for a discrete event simulator. NetObjs may provide an event id that
 /// they internally keep track of to identify events. This is the central object fot the simulator
 pub struct Scheduler<'a> {
     /// Current time in simulation
     now: Time,
-    /// List of actions in the future
-    actions: BinaryHeap<ActionSet>,
-    /// Same as 'actions', but searchable by time
-    action_times: FnvHashMap<Time, ActionSet>,
+    /// List of times at which we have scheduled actions in the future
+    action_times: BinaryHeap<Reverse<Time>>,
+    /// Maps times to the set of all actions that have been scheduled for that time. 'from'
+    /// indicates the object that scheduled this action. 'to' indicates the object we are scheduling
+    /// to. Format: (from, to, action)
+    actions: FnvHashMap<Time, Vec<(NetObjId, NetObjId, Action)>>,
     /// The set of all objects that can schedule events on this scheduler
     objs: Vec<Box<dyn NetObj + 'a>>,
     /// For uniquely allocating addresses
@@ -182,39 +155,6 @@ impl<'a> Default for Scheduler<'a> {
 }
 
 impl<'a> Scheduler<'a> {
-    /// Schedule the given action now or in the future from `from` to object `obj_id`.
-    fn schedule(
-        &mut self,
-        when: Time,
-        from: NetObjId,
-        to: NetObjId,
-        action: Action,
-    ) -> Result<(), Error> {
-        // Check if event needs to be scheduled is in the past or right now. We cannot handle
-        // events that happen right now, since simulate takes an iterator to 'ActionSet::events', which
-        // won't update when things are pushed into the vector. In such cases, callers should just
-        // do the event instead of scheduling it.
-        if when < self.now {
-            return Err(format_err!(
-                "Event to be scheduled at time {:?}, which is in the past. Current time is {:?}.",
-                when,
-                self.now
-            ));
-        }
-
-        // If an event has already been scheduled for this time, add to the same event
-        if let Some(actions) = self.action_times.get_mut(&when) {
-            actions.actions.push((from, to, action))
-        } else {
-            self.actions.push(ActionSet {
-                actions: vec![(from, to, action)],
-                when,
-            })
-        }
-
-        Ok(())
-    }
-
     /// Get the object ID that will be allocated to the next object that will be registered. We
     /// promise to start from zero and allocate in increments of 1.
     pub fn next_obj_id(&self) -> NetObjId {
@@ -241,6 +181,37 @@ impl<'a> Scheduler<'a> {
         Addr(res)
     }
 
+    /// Schedule the given action now or in the future from `from` to object `obj_id`.
+    fn schedule(
+        &mut self,
+        when: Time,
+        from: NetObjId,
+        to: NetObjId,
+        action: Action,
+    ) -> Result<(), Error> {
+        // Check if event needs to be scheduled is in the past or right now. We cannot handle
+        // events that happen right now, since simulate takes an iterator to 'ActionSet::events', which
+        // won't update when things are pushed into the vector. In such cases, callers should just
+        // do the event instead of scheduling it.
+        if when < self.now {
+            return Err(format_err!(
+                "Event to be scheduled at time {:?}, which is in the past. Current time is {:?}.",
+                when,
+                self.now
+            ));
+        }
+
+        // If an event has already been scheduled for this time, add to the same event
+        if let Some(actions) = self.actions.get_mut(&when) {
+            actions.push((from, to, action))
+        } else {
+            self.action_times.push(Reverse(when));
+            self.actions.insert(when, vec![(from, to, action)]);
+        }
+
+        Ok(())
+    }
+
     /// Start simulation. Loop till no more events are scheduled, or till time `till` if given
     pub fn simulate(&mut self, till: Option<Time>) -> Result<(), Error> {
         // We start from time 0
@@ -257,9 +228,10 @@ impl<'a> Scheduler<'a> {
             self.schedule(when, to, to1, action)?;
         }
 
-        while let Some(next) = self.actions.pop() {
-            assert!(self.now <= next.when);
-            self.now = next.when;
+        while let Some(Reverse(when)) = self.action_times.pop() {
+            let actions = self.actions.remove(&when).unwrap();
+            assert!(self.now <= when);
+            self.now = when;
             if let Some(till) = till {
                 if self.now > till {
                     break;
@@ -269,7 +241,7 @@ impl<'a> Scheduler<'a> {
             // Gather all things to be scheduled next in a vec and schedle all of them together, so
             // we can avoid having to modify `next.actions` in flight
             let mut actions_to_sched = Vec::new();
-            for (from, to, action) in next.actions {
+            for (from, to, action) in actions {
                 // Take the given action
                 let new_actions = match action {
                     Action::Event(uid) => self.objs[to].event(to, from, self.now, uid)?,
