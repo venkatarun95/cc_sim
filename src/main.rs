@@ -1,10 +1,12 @@
 mod base;
+mod cc;
 mod config;
 mod simulator;
 mod tracer;
 mod transport;
 
 use base::*;
+use cc::*;
 use config::{Config, ConfigLog, LogType};
 use simulator::*;
 use tracer::Tracer;
@@ -42,9 +44,15 @@ fn main() -> Result<(), Error> {
 
     // Create the objects and link up the topology
     // Topology: sender -> router -> linker -> delay -> acker ---> ack to sender
-    let tcp_sender = TcpSender::new(router_id, sender_addr, acker_addr, AIMD::default(), &tracer);
+    let tcp_sender = TcpSender::new(
+        router_id,
+        sender_addr,
+        acker_addr,
+        Instant::new(12),
+        &tracer,
+    );
     let mut router = Router::new(sched.next_addr());
-    let link = Link::new(1_500_000, 10, delay_id);
+    let link = Link::new(1_500_000, 1000, delay_id);
     let delay = Delay::new(Time::from_micros(10_000), acker_id);
     let acker = Acker::new(acker_addr, tcp_sender_id);
 
@@ -58,7 +66,7 @@ fn main() -> Result<(), Error> {
     sched.register_obj(Box::new(acker));
     sched.register_obj(Box::new(tcp_sender));
 
-    sched.simulate(Some(Time::from_micros(10_000_000)))?;
+    sched.simulate(Some(Time::from_micros(2_000_000)))?;
 
     tracer.finalize();
 
