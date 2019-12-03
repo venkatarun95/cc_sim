@@ -3,7 +3,6 @@
 use failure::{format_err, Error};
 use fnv::FnvHashMap;
 use std::collections::BinaryHeap;
-use std::ops::Deref;
 use std::rc::Rc;
 
 /// Time in microseconds
@@ -34,7 +33,7 @@ impl std::ops::Add for Time {
     type Output = Self;
 
     fn add(self, other: Self) -> Self {
-        Time(*self + *other)
+        Time(self.0 + other.0)
     }
 }
 
@@ -48,7 +47,7 @@ impl std::ops::Sub for Time {
                 self, other
             );
         }
-        Time(*self - *other)
+        Time(self.0 - other.0)
     }
 }
 
@@ -56,12 +55,9 @@ impl Time {
     pub fn from_micros(micros: u64) -> Self {
         Time(micros)
     }
-}
 
-impl Deref for Time {
-    type Target = u64;
-    fn deref(&self) -> &u64 {
-        &self.0
+    pub fn micros(self) -> u64 {
+        self.0
     }
 }
 
@@ -160,7 +156,7 @@ impl Eq for ActionSet {}
 
 /// A calendar scheduler for a discrete event simulator. NetObjs may provide an event id that
 /// they internally keep track of to identify events. This is the central object fot the simulator
-pub struct Scheduler {
+pub struct Scheduler<'a> {
     /// Current time in simulation
     now: Time,
     /// List of actions in the future
@@ -168,12 +164,12 @@ pub struct Scheduler {
     /// Same as 'actions', but searchable by time
     action_times: FnvHashMap<Time, ActionSet>,
     /// The set of all objects that can schedule events on this scheduler
-    objs: Vec<Box<dyn NetObj>>,
+    objs: Vec<Box<dyn NetObj + 'a>>,
     /// For uniquely allocating addresses
     num_addr: u64,
 }
 
-impl Default for Scheduler {
+impl<'a> Default for Scheduler<'a> {
     fn default() -> Self {
         Self {
             now: Time(0),
@@ -185,7 +181,7 @@ impl Default for Scheduler {
     }
 }
 
-impl Scheduler {
+impl<'a> Scheduler<'a> {
     /// Schedule the given action now or in the future from `from` to object `obj_id`.
     fn schedule(
         &mut self,
@@ -228,7 +224,7 @@ impl Scheduler {
     /// Register an object for this scheduler. Only registered objects can register events. Returns
     /// a unique identifier that can be used to refer to this object later. We promise to allocate
     /// in increments of 1.
-    pub fn register_obj(&mut self, obj: Box<dyn NetObj>) -> NetObjId {
+    pub fn register_obj(&mut self, obj: Box<dyn NetObj + 'a>) -> NetObjId {
         self.objs.push(obj);
         self.objs.len() - 1
     }
@@ -245,8 +241,8 @@ impl Scheduler {
         Addr(res)
     }
 
-    /// Start simulation. Loop till simulation ends
-    pub fn simulate(&mut self) -> Result<(), Error> {
+    /// Start simulation. Loop till no more events are scheduled, or till time `till` if given
+    pub fn simulate(&mut self, till: Option<Time>) -> Result<(), Error> {
         // We start from time 0
         self.now = Time::from_micros(0);
 
@@ -262,12 +258,17 @@ impl Scheduler {
         }
 
         while let Some(next) = self.actions.pop() {
+            assert!(self.now <= next.when);
+            self.now = next.when;
+            if let Some(till) = till {
+                if self.now > till {
+                    break;
+                }
+            }
+
             // Gather all things to be scheduled next in a vec and schedle all of them together, so
             // we can avoid having to modify `next.actions` in flight
             let mut actions_to_sched = Vec::new();
-
-            assert!(self.now <= next.when);
-            self.now = next.when;
             for (from, to, action) in next.actions {
                 // Take the given action
                 let new_actions = match action {

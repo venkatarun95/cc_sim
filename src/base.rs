@@ -125,7 +125,7 @@ impl NetObj for Link {
         // If buffer was previously empty, schedule an event to deque it. Else such an event would
         // already have been scheduled
         if self.buffer.len() == 1 {
-            let send_time = Time::from_micros(*now + 1_000_000 * pkt.size / self.rate);
+            let send_time = Time::from_micros(now.micros() + 1_000_000 * pkt.size / self.rate);
             Ok(vec![(send_time, obj_id, Action::Event(0))])
         } else {
             Ok(Vec::new())
@@ -151,7 +151,7 @@ impl NetObj for Link {
         // If needed, schedule for transmission of the next packet
         if !self.buffer.is_empty() {
             let size = self.buffer.front().unwrap().size;
-            let send_time = Time::from_micros(*now + 1_000_000 * size / self.rate);
+            let send_time = Time::from_micros(now.micros() + 1_000_000 * size / self.rate);
             res.push((send_time, obj_id, Action::Event(0)))
         }
         Ok(res)

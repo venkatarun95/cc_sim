@@ -1,4 +1,5 @@
 use crate::simulator::*;
+use crate::tracer::{TraceElem, Tracer};
 
 use failure::Error;
 
@@ -16,7 +17,7 @@ pub trait CongestionControl {
 }
 
 /// A sender which sends a given amount of data using congestion control
-pub struct TcpSender<C: CongestionControl + 'static> {
+pub struct TcpSender<'a, C: CongestionControl + 'static> {
     /// The hop on which to send packets
     next: NetObjId,
     /// The address of this sender
@@ -34,10 +35,12 @@ pub struct TcpSender<C: CongestionControl + 'static> {
     last_tx_time: Time,
     /// Whether a transmission is currently scheduled
     tx_scheduled: bool,
+    /// Tracer for events and measurements
+    tracer: &'a Tracer,
 }
 
-impl<C: CongestionControl + 'static> TcpSender<C> {
-    pub fn new(next: NetObjId, addr: Addr, dest: Addr, cc: C) -> Self {
+impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
+    pub fn new(next: NetObjId, addr: Addr, dest: Addr, cc: C, tracer: &'a Tracer) -> Self {
         Self {
             next,
             addr,
@@ -47,6 +50,7 @@ impl<C: CongestionControl + 'static> TcpSender<C> {
             last_acked: 0,
             last_tx_time: Time::from_micros(0),
             tx_scheduled: true,
+            tracer,
         }
     }
 
@@ -63,7 +67,6 @@ impl<C: CongestionControl + 'static> TcpSender<C> {
                 seq_num: self.last_sent,
             },
         };
-        println!("Now: {} cwnd: {}", *now, self.cc.get_cwnd());
         vec![(now, self.next, Action::Push(Rc::new(pkt)))]
     }
 
@@ -92,7 +95,7 @@ impl<C: CongestionControl + 'static> TcpSender<C> {
     }
 }
 
-impl<C: CongestionControl + 'static> NetObj for TcpSender<C> {
+impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
     fn init(
         &mut self,
         obj_id: NetObjId,
@@ -124,6 +127,12 @@ impl<C: CongestionControl + 'static> NetObj for TcpSender<C> {
 
             self.cc.on_ack(rtt, num_lost);
 
+            self.tracer
+                .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
+            self.tracer.log(obj_id, now, TraceElem::TcpSenderRtt(rtt));
+            self.tracer
+                .log(obj_id, now, TraceElem::TcpSenderLoss(num_lost));
+
             Ok(self.schedule_tx(obj_id, now))
         } else {
             unreachable!()
@@ -139,6 +148,7 @@ impl<C: CongestionControl + 'static> NetObj for TcpSender<C> {
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         assert_eq!(obj_id, from);
         if uid == 0 {
+            // A transmission was scheduled
             self.tx_scheduled = false;
             let mut res = self.tx_packet(now);
             res.append(&mut self.schedule_tx(obj_id, now));
@@ -147,6 +157,12 @@ impl<C: CongestionControl + 'static> NetObj for TcpSender<C> {
             // It was a timeout
             // TODO: Schedule timeouts
             self.cc.on_timeout();
+
+            // Trace new cwnd and timeout event
+            self.tracer
+                .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
+            self.tracer.log(obj_id, now, TraceElem::TcpSenderTimeout);
+
             Ok(Vec::new())
         } else {
             unreachable!()

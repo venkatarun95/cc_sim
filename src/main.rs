@@ -1,14 +1,32 @@
 mod base;
+mod config;
 mod simulator;
+mod tracer;
 mod transport;
 
 use base::*;
+use config::{Config, ConfigLog, LogType};
 use simulator::*;
+use tracer::Tracer;
 use transport::*;
 
 use failure::Error;
 
 fn main() -> Result<(), Error> {
+    // Create configuration
+    let config = Config {
+        log: ConfigLog {
+            out_terminal: "png".to_string(),
+            out_file: "out.png".to_string(),
+            cwnd: LogType::Plot,
+            rtt: LogType::Plot,
+            sender_losses: LogType::Ignore,
+            timeouts: LogType::Ignore,
+            queue: LogType::Ignore,
+        },
+    };
+
+    let tracer = Tracer::new(config.clone());
     let mut sched = Scheduler::default();
 
     // Scheduler promises to allocate NetObjId in ascending order in increments of one. So we can
@@ -24,7 +42,7 @@ fn main() -> Result<(), Error> {
 
     // Create the objects and link up the topology
     // Topology: sender -> router -> linker -> delay -> acker ---> ack to sender
-    let tcp_sender = TcpSender::new(router_id, sender_addr, acker_addr, AIMD::default());
+    let tcp_sender = TcpSender::new(router_id, sender_addr, acker_addr, AIMD::default(), &tracer);
     let mut router = Router::new(sched.next_addr());
     let link = Link::new(1_500_000, 10, delay_id);
     let delay = Delay::new(Time::from_micros(10_000), acker_id);
@@ -40,7 +58,9 @@ fn main() -> Result<(), Error> {
     sched.register_obj(Box::new(acker));
     sched.register_obj(Box::new(tcp_sender));
 
-    sched.simulate()?;
+    sched.simulate(Some(Time::from_micros(10_000_000)))?;
+
+    tracer.finalize();
 
     Ok(())
 }
