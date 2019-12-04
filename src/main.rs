@@ -31,40 +31,48 @@ fn main() -> Result<(), Error> {
     let tracer = Tracer::new(config.clone());
     let mut sched = Scheduler::default();
 
+    // Topology: n senders -> link -> delay -> acker -> router -> original senders
+    let num_senders = 2;
+
     // Scheduler promises to allocate NetObjId in ascending order in increments of one. So we can
     // determine the ids each object will be assigned
-    let router_id = sched.next_obj_id();
-    let link_id = router_id + 1;
+    let link_id = sched.next_obj_id();
     let delay_id = link_id + 1;
     let acker_id = delay_id + 1;
-    let tcp_sender_id = acker_id + 1;
+    let tcp_sender_id_start = acker_id + 1;
+    let router_id = tcp_sender_id_start + num_senders;
 
-    let sender_addr = sched.next_addr();
-    let acker_addr = sched.next_addr();
-
-    // Create the objects and link up the topology
-    // Topology: sender -> router -> linker -> delay -> acker ---> ack to sender
-    let tcp_sender = TcpSender::new(
-        router_id,
-        sender_addr,
-        acker_addr,
-        Instant::new(12),
-        &tracer,
-    );
-    let mut router = Router::new(sched.next_addr());
+    // Create network core
     let link = Link::new(1_500_000, 1000, delay_id);
     let delay = Delay::new(Time::from_micros(10_000), acker_id);
-    let acker = Acker::new(acker_addr, tcp_sender_id);
+    let acker_addr = sched.next_addr();
+    let acker = Acker::new(acker_addr, router_id);
+    let mut router = Router::new(sched.next_addr());
 
-    let acker_port = router.add_port(link_id);
-    router.add_route(acker_addr, acker_port);
-
-    // Register all the objects. Remember to do it in the same order as the ids
-    sched.register_obj(Box::new(router));
+    // Register the core objects. Remember to do it in the same order as the ids
     sched.register_obj(Box::new(link));
     sched.register_obj(Box::new(delay));
     sched.register_obj(Box::new(acker));
-    sched.register_obj(Box::new(tcp_sender));
+
+    // Create TCP senders and add routes to router
+    for i in 0..num_senders {
+        let sender_addr = sched.next_addr();
+        let tcp_sender = TcpSender::new(
+            link_id,
+            sender_addr,
+            acker_addr,
+            Instant::default(),
+            &tracer,
+        );
+        let port = router.add_port(tcp_sender_id_start + i);
+        router.add_route(sender_addr, port);
+
+        // Register the TCP sender
+        sched.register_obj(Box::new(tcp_sender));
+    }
+
+    // Register router (after registering the TCP senders)
+    sched.register_obj(Box::new(router));
 
     sched.simulate(Some(Time::from_micros(2_000_000)))?;
 

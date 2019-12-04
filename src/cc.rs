@@ -1,5 +1,7 @@
-use crate::simulator::Time;
+use crate::simulator::{SeqNum, Time};
 use crate::transport::CongestionControl;
+
+use std::cmp::min;
 
 #[allow(dead_code)]
 pub struct AIMD {
@@ -13,7 +15,7 @@ impl Default for AIMD {
 }
 
 impl CongestionControl for AIMD {
-    fn on_ack(&mut self, _rtt: Time, num_lost: u64) {
+    fn on_ack(&mut self, _now: Time, _ack_seq: SeqNum, _rtt: Time, num_lost: u64) {
         if num_lost == 0 {
             self.cwnd += 1. / self.cwnd;
         } else {
@@ -22,10 +24,9 @@ impl CongestionControl for AIMD {
                 self.cwnd = 1.;
             }
         }
-        if num_lost != 0 {
-            println!("Cwnd: {:2} num_lost: {}", self.cwnd, num_lost);
-        }
     }
+
+    fn on_send(&mut self, _now: Time, _seq_num: SeqNum) {}
 
     fn on_timeout(&mut self) {
         self.cwnd = 1.;
@@ -43,51 +44,108 @@ impl CongestionControl for AIMD {
 #[allow(dead_code)]
 pub struct Instant {
     cwnd: f64,
-    min_rtt: Time,
-    // BDP in packets
-    bdp: u64,
+    rtt_min: Time,
+    /// The last packet seq_num that was sent
+    last_sent_seq: SeqNum,
+    /// We will update cwnd when this packet (or later) returns. We also note the time when this
+    /// packet was sent. This way, we update only once per RTT. This is set by `on_send` and unset by
+    /// `one_ack` or `on_timeout`.
+    waiting_seq: Option<(SeqNum, Time)>,
+    /// The standing RTT (min RTT since `waiting_seq` was sent). This is set by
+    /// `on_send` and unset by `one_ack` or `on_timeout`.
+    rtt_standing: Option<Time>,
+    /// The number of packets acked since `waiting_seq` was sent. This is set by `on_send` and
+    /// unset by `one_ack` or `on_timeout`.
+    achieved_bdp: Option<u64>,
 }
 
-impl Instant {
-    pub fn new(bdp: u64) -> Self {
+impl Default for Instant {
+    fn default() -> Self {
         Self {
             cwnd: 1.,
-            min_rtt: Time::from_micros(std::u64::MAX),
-            bdp,
+            rtt_min: Time::from_micros(std::u64::MAX),
+            last_sent_seq: 0,
+            waiting_seq: None,
+            rtt_standing: None,
+            achieved_bdp: None,
         }
     }
 }
 
+// ATT account number 4361 5082 2804
 impl CongestionControl for Instant {
-    fn on_ack(&mut self, rtt: Time, num_lost: u64) {
-        if rtt < self.min_rtt {
-            self.min_rtt = rtt;
+    fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, rtt: Time, num_lost: u64) {
+        if rtt < self.rtt_min {
+            self.rtt_min = rtt;
         }
 
-        if num_lost != 0 {
+        // See if it is time to update cwnd
+        if num_lost > 0 {
             self.cwnd /= 2.;
-            println!("Packets lost at cwnd = {}", self.cwnd);
-        } else if rtt == self.min_rtt {
-            // Double within an RTT
-            self.cwnd += 1.;
+            if self.cwnd < 1. {
+                self.cwnd = 1.;
+            }
+            return;
+        } else if let Some((seq, _)) = self.waiting_seq {
+            // Update `rtt_standing`, `achieved_bdp`
+            *self.rtt_standing.as_mut().unwrap() = min(rtt, self.rtt_standing.unwrap());
+            *self.achieved_bdp.as_mut().unwrap() += 1;
+            // Return if we are not ready yet
+            if ack_seq < seq {
+                return;
+            }
         } else {
+            // We haven't sent a packet since last time yet. So wait
+            return;
+        }
+
+        let queue_del = (self.rtt_standing.unwrap() - self.rtt_min).micros();
+
+        if queue_del == 0 {
+            // Negligible queuing. Double
+            self.cwnd *= 2.;
+        } else {
+            // The actual bdp is achieved_bdp * rtt_min / rtt to compensate for the fact that, with
+            // larger RTTs we measure bigger bdps. Note, the rtt term in the numerator appears
+            // because (cwnd = target rate * current rtt)
             let new_cwnd =
-                1.8 * self.bdp as f64 * rtt.micros() as f64 / (rtt - self.min_rtt).micros() as f64;
+                2. * self.achieved_bdp.unwrap() as f64 as f64 * self.rtt_min.micros() as f64
+                    / queue_del as f64;
+
+            // Limit growth to doubling once per RTT
             if new_cwnd > self.cwnd * 2. {
-                // Double in 1 RTT. We don't want to more than double
-                self.cwnd += 1.;
+                // Still well below target. Double
+                self.cwnd *= 2.;
             } else {
                 self.cwnd = new_cwnd;
             }
         }
+
+        // Prepare for next interval
+        self.waiting_seq = None;
+        self.rtt_standing = None;
+        self.achieved_bdp = None;
 
         if self.cwnd < 1. {
             self.cwnd = 1.;
         }
     }
 
+    fn on_send(&mut self, now: Time, seq_num: SeqNum) {
+        assert!(seq_num > self.last_sent_seq);
+        self.last_sent_seq = seq_num;
+        if self.waiting_seq.is_none() {
+            self.waiting_seq = Some((seq_num, now));
+            self.rtt_standing = Some(Time::from_micros(std::u64::MAX));
+            self.achieved_bdp = Some(0);
+        }
+    }
+
     fn on_timeout(&mut self) {
         self.cwnd = 1.;
+        self.waiting_seq = None;
+        self.rtt_standing = None;
+        self.achieved_bdp = None;
     }
 
     fn get_cwnd(&mut self) -> u64 {

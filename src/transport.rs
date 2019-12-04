@@ -6,8 +6,12 @@ use failure::Error;
 use std::rc::Rc;
 
 pub trait CongestionControl {
-    /// Called each time an ack arrives. `loss` denotes the number of packets that were lost.
-    fn on_ack(&mut self, rtt: Time, num_lost: u64);
+    /// Called each time an ack arrives. `now` and `ack_seq` are enough to compute `rtt` and
+    /// `num_lost`. They are provided separately for convenience. `loss` denotes the number of
+    /// packets that were lost.
+    fn on_ack(&mut self, now: Time, ack_seq: SeqNum, rtt: Time, num_lost: u64);
+    /// Called each time a packet is sent
+    fn on_send(&mut self, now: Time, seq_num: SeqNum);
     /// Called if the sender timed out
     fn on_timeout(&mut self);
     /// The congestion window (in packets)
@@ -67,6 +71,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
                 seq_num: self.last_sent,
             },
         };
+        self.cc.on_send(now, self.last_sent);
         vec![(now, self.next, Action::Push(Rc::new(pkt)))]
     }
 
@@ -125,7 +130,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             let num_lost = ack_seq - self.last_acked - 1;
             self.last_acked = ack_seq;
 
-            self.cc.on_ack(rtt, num_lost);
+            self.cc.on_ack(now, ack_seq, rtt, num_lost);
 
             self.tracer
                 .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
