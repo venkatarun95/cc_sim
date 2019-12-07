@@ -24,7 +24,8 @@ fn main() -> Result<(), Error> {
             rtt: LogType::Plot,
             sender_losses: LogType::Ignore,
             timeouts: LogType::Ignore,
-            queue: LogType::Ignore,
+            link_rates: LogType::Plot,
+            link_bucket_size: Time::from_micros(100_000),
         },
     };
 
@@ -32,7 +33,7 @@ fn main() -> Result<(), Error> {
     let mut sched = Scheduler::default();
 
     // Topology: n senders -> link -> delay -> acker -> router -> original senders
-    let num_senders = 10;
+    let num_senders = 1;
 
     // Scheduler promises to allocate NetObjId in ascending order in increments of one. So we can
     // determine the ids each object will be assigned
@@ -43,8 +44,14 @@ fn main() -> Result<(), Error> {
     let router_id = tcp_sender_id_start + num_senders;
 
     // Create network core
-    let link = Link::new(1_500_000, 10000, delay_id);
-    let delay = Delay::new(Time::from_micros(10_000), acker_id);
+    //let link = Link::new(1_500_000, 10000, delay_id);
+    let link = LinkMM::new(
+        std::path::Path::new("traces/ATT-LTE-driving.down"),
+        1000,
+        delay_id,
+        &tracer,
+    )?;
+    let delay = Delay::new(Time::from_micros(200_000), acker_id);
     let acker_addr = sched.next_addr();
     let acker = Acker::new(acker_addr, router_id);
     let mut router = Router::new(sched.next_addr());
@@ -63,7 +70,7 @@ fn main() -> Result<(), Error> {
             acker_addr,
             Instant::default(),
             Time::from_micros(i as u64 * 1_000_000),
-            TcpSenderTxLength::Duration(Time::from_micros(1_000_000)),
+            TcpSenderTxLength::Infinite,
             &tracer,
         );
         let port = router.add_port(tcp_sender_id_start + i);
@@ -76,7 +83,7 @@ fn main() -> Result<(), Error> {
     // Register router (after registering the TCP senders)
     sched.register_obj(Box::new(router));
 
-    sched.simulate(Some(Time::from_micros(10_000_000)))?;
+    sched.simulate(Some(Time::from_micros(100_000_000)))?;
 
     tracer.finalize();
 
