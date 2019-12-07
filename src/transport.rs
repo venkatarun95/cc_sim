@@ -45,6 +45,12 @@ pub struct TcpSender<'a, C: CongestionControl + 'static> {
     last_acked: SeqNum,
     /// Last time we transmitted a packet
     last_tx_time: Time,
+    /// Smoothed RTT (for computing timeout)
+    srtt: Time,
+    /// Variation of RTT (for computing timeout)
+    rttvar: Time,
+    /// Time when the last ack was received. Used for deciding when a scheduled timeout was valid
+    last_ack_time: Time,
     /// Whether a transmission is currently scheduled
     tx_scheduled: bool,
     /// Time when the flow should start and end
@@ -78,6 +84,9 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
             last_sent: 0,
             last_acked: 0,
             last_tx_time: Time::from_micros(0),
+            srtt: Time::from_millis(1_000),
+            rttvar: Time::from_micros(0),
+            last_ack_time: Time::from_micros(0),
             tx_scheduled: true,
             start_time,
             tx_length,
@@ -95,7 +104,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
     }
 
     /// Transmit a packet now by returning an event that pushes a packet
-    fn tx_packet(&mut self, now: Time) -> Vec<(Time, NetObjId, Action)> {
+    fn tx_packet(&mut self, obj_id: NetObjId, now: Time) -> Vec<(Time, NetObjId, Action)> {
         self.last_sent += 1;
         let pkt = Packet {
             uid: get_next_pkt_seq_num(),
@@ -108,7 +117,11 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
             },
         };
         self.cc.on_send(now, self.last_sent);
-        vec![(now, self.next, Action::Push(Rc::new(pkt)))]
+        let timeout = self.srtt + Time::from_micros(4 * self.rttvar.micros());
+        vec![
+            (now, self.next, Action::Push(Rc::new(pkt))),
+            (now + timeout, obj_id, Action::Event(1)),
+        ]
     }
 
     /// Schedule a transmission if appropriate
@@ -169,6 +182,17 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             let rtt = now - sent_time;
             let num_lost = ack_seq - self.last_acked - 1;
             self.last_acked = ack_seq;
+            self.last_ack_time = now;
+
+            // Update srtt and rttvars
+            self.rttvar = Time::from_micros(
+                ((1. - 1. / 4.) * self.rttvar.micros() as f64
+                    + 1. / 4. * (self.srtt.micros() as f64 - rtt.micros() as f64).abs())
+                    as u64,
+            );
+            self.srtt = Time::from_micros(
+                ((1. - 1. / 8.) * self.srtt.micros() as f64 + rtt.micros() as f64 / 8.) as u64,
+            );
 
             self.cc.on_ack(now, ack_seq, rtt, num_lost);
 
@@ -199,19 +223,22 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
         if uid == 0 {
             // A transmission was scheduled
             self.tx_scheduled = false;
-            let mut res = self.tx_packet(now);
+            let mut res = self.tx_packet(obj_id, now);
             res.append(&mut self.schedule_tx(obj_id, now));
             Ok(res)
         } else if uid == 1 {
-            // It was a timeout
-            // TODO: Schedule timeouts
-            self.cc.on_timeout();
+            // It was a timeout we scheduled. See if it is still relevant
+            let timeout = self.srtt + Time::from_micros(4 * self.rttvar.micros());
+            if self.last_ack_time + timeout <= now {
+                //println!("Timeout at {}", now);
+                // It was a timeout
+                self.cc.on_timeout();
 
-            // Trace new cwnd and timeout event
-            self.tracer
-                .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
-            self.tracer.log(obj_id, now, TraceElem::TcpSenderTimeout);
-
+                // Trace new cwnd and timeout event
+                self.tracer
+                    .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
+                self.tracer.log(obj_id, now, TraceElem::TcpSenderTimeout);
+            }
             Ok(Vec::new())
         } else {
             unreachable!()

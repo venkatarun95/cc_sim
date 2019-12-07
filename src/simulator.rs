@@ -37,6 +37,18 @@ impl fmt::Display for Addr {
     }
 }
 
+impl fmt::Display for Time {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0 < 1000 {
+            write!(f, "{}us", self.0)
+        } else if self.0 < 1_000_000 {
+            write!(f, "{:.2}ms", self.0 as f64 * 1e-3)
+        } else {
+            write!(f, "{:.2}s", self.0 as f64 * 1e-6)
+        }
+    }
+}
+
 impl std::ops::Add for Time {
     type Output = Self;
 
@@ -62,6 +74,14 @@ impl std::ops::Sub for Time {
 impl Time {
     pub fn from_micros(micros: u64) -> Self {
         Time(micros)
+    }
+
+    pub fn from_millis(millis: u64) -> Self {
+        Time(millis * 1000)
+    }
+
+    pub fn from_secs(secs: u64) -> Self {
+        Time(secs * 1_000_000)
     }
 
     pub fn micros(self) -> u64 {
