@@ -214,8 +214,15 @@ impl Tracer {
                 .set_y_label("RTT (ms)", &[]);
             // Add lines for each sender
             for (id, data) in self.rtts.borrow().iter() {
-                let (times, cwnds): (Vec<f64>, Vec<f64>) =
-                    data.iter().map(|(t, r)| (t.millis(), r.millis())).unzip();
+                let (times, cwnds): (Vec<f64>, Vec<f64>) = data
+                    .iter()
+                    .map(|(t, r)| {
+                        (
+                            t.millis(),
+                            std::cmp::min(r, &Time::from_millis(500)).millis(),
+                        )
+                    })
+                    .unzip();
                 ax.lines(times, cwnds, &[gnuplot::Caption(&format!("Obj{}", id))]);
             }
 
@@ -268,7 +275,7 @@ impl Tracer {
                     let ingress: Vec<f64> = buckets
                         .iter()
                         .map(|x| {
-                            x.num_ingress_bytes[sender] as f64 * 8e-6
+                            *x.num_ingress_bytes.get(sender).unwrap_or(&0) as f64 * 8e-6
                                 / self.config.log.link_bucket_size.secs()
                         })
                         .collect();
