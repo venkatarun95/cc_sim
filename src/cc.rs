@@ -122,8 +122,9 @@ impl CongestionControl for Instant {
             // right alpha we get the following for the constant 'k', which should be less than (1
             // + pi) for stability
             let k = 2.;
-            let new_cwnd =
-                self.cwnd * (self.rtt_min.micros() as f64 / (queue_del as f64 * k)).sqrt();
+            self.rtt_min = Time::from_millis(20);
+            let new_cwnd = (self.cwnd + self.cwnd.sqrt() + 1.)
+                * (self.rtt_min.micros() as f64 / (queue_del as f64 * k)).sqrt();
 
             // Limit growth to doubling once per RTT
             if new_cwnd > self.cwnd * max_incr {
