@@ -1,5 +1,7 @@
 //! Global configuration
 
+use crate::simulator::Time;
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub log: ConfigLog,
@@ -45,6 +47,8 @@ pub struct ConfigLog {
     pub sender_losses: LogType,
     /// Timeouts from `TcpSender`
     pub timeouts: LogType,
-    /// Queue length from `Link`
-    pub queue: LogType,
+    /// Packet ingress/egress rates and transmission opportunities from links
+    pub link_rates: LogType,
+    /// Bucket size for plotting link stats
+    pub link_bucket_size: Time,
 }

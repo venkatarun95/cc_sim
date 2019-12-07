@@ -4,6 +4,7 @@ use failure::{format_err, Error};
 use fnv::FnvHashMap;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::fmt;
 use std::rc::Rc;
 
 /// Time in microseconds
@@ -27,6 +28,12 @@ pub fn get_next_pkt_seq_num() -> SeqNum {
     unsafe {
         NEXT_SEQ_NUM += 1;
         NEXT_SEQ_NUM
+    }
+}
+
+impl fmt::Display for Addr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "A{}", self.0)
     }
 }
 
@@ -59,6 +66,14 @@ impl Time {
 
     pub fn micros(self) -> u64 {
         self.0
+    }
+
+    pub fn millis(self) -> f64 {
+        self.0 as f64 / 1e3
+    }
+
+    pub fn secs(self) -> f64 {
+        self.0 as f64 / 1e6
     }
 }
 
