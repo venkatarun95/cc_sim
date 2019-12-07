@@ -32,7 +32,7 @@ fn main() -> Result<(), Error> {
     let mut sched = Scheduler::default();
 
     // Topology: n senders -> link -> delay -> acker -> router -> original senders
-    let num_senders = 2;
+    let num_senders = 10;
 
     // Scheduler promises to allocate NetObjId in ascending order in increments of one. So we can
     // determine the ids each object will be assigned
@@ -43,7 +43,7 @@ fn main() -> Result<(), Error> {
     let router_id = tcp_sender_id_start + num_senders;
 
     // Create network core
-    let link = Link::new(1_500_000, 1000, delay_id);
+    let link = Link::new(1_500_000, 10000, delay_id);
     let delay = Delay::new(Time::from_micros(10_000), acker_id);
     let acker_addr = sched.next_addr();
     let acker = Acker::new(acker_addr, router_id);
@@ -62,6 +62,8 @@ fn main() -> Result<(), Error> {
             sender_addr,
             acker_addr,
             Instant::default(),
+            Time::from_micros(i as u64 * 1_000_000),
+            TcpSenderTxLength::Duration(Time::from_micros(1_000_000)),
             &tracer,
         );
         let port = router.add_port(tcp_sender_id_start + i);
@@ -74,7 +76,7 @@ fn main() -> Result<(), Error> {
     // Register router (after registering the TCP senders)
     sched.register_obj(Box::new(router));
 
-    sched.simulate(Some(Time::from_micros(2_000_000)))?;
+    sched.simulate(Some(Time::from_micros(10_000_000)))?;
 
     tracer.finalize();
 

@@ -20,6 +20,14 @@ pub trait CongestionControl {
     fn get_intersend_time(&mut self) -> Time;
 }
 
+/// How long the TcpSender should send packets
+#[allow(dead_code)]
+pub enum TcpSenderTxLength {
+    Duration(Time),
+    Bytes(u64),
+    Infinite,
+}
+
 /// A sender which sends a given amount of data using congestion control
 pub struct TcpSender<'a, C: CongestionControl + 'static> {
     /// The hop on which to send packets
@@ -39,12 +47,29 @@ pub struct TcpSender<'a, C: CongestionControl + 'static> {
     last_tx_time: Time,
     /// Whether a transmission is currently scheduled
     tx_scheduled: bool,
+    /// Time when the flow should start and end
+    start_time: Time,
+    /// How much should it transmit
+    tx_length: TcpSenderTxLength,
     /// Tracer for events and measurements
     tracer: &'a Tracer,
 }
 
 impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
-    pub fn new(next: NetObjId, addr: Addr, dest: Addr, cc: C, tracer: &'a Tracer) -> Self {
+    const PACKET_SIZE: u64 = 1500;
+
+    /// `next` is the next hop to which packets should be forwarded. `addr` is the destination the
+    /// packet should be sent to.  `start_time` and `end_time` are the times at which the flow should
+    /// start and end.
+    pub fn new(
+        next: NetObjId,
+        addr: Addr,
+        dest: Addr,
+        cc: C,
+        start_time: Time,
+        tx_length: TcpSenderTxLength,
+        tracer: &'a Tracer,
+    ) -> Self {
         Self {
             next,
             addr,
@@ -54,7 +79,18 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
             last_acked: 0,
             last_tx_time: Time::from_micros(0),
             tx_scheduled: true,
+            start_time,
+            tx_length,
             tracer,
+        }
+    }
+
+    /// Whether the flow is over or not
+    fn has_ended(&self, now: Time) -> bool {
+        match self.tx_length {
+            TcpSenderTxLength::Duration(time) => self.start_time + time < now,
+            TcpSenderTxLength::Bytes(bytes) => self.last_sent * Self::PACKET_SIZE >= bytes,
+            TcpSenderTxLength::Infinite => false,
         }
     }
 
@@ -64,7 +100,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
         let pkt = Packet {
             uid: get_next_pkt_seq_num(),
             sent_time: now,
-            size: 1500,
+            size: Self::PACKET_SIZE,
             dest: self.dest,
             src: self.addr,
             ptype: PacketType::Data {
@@ -107,7 +143,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
         _now: Time,
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         self.tx_scheduled = true;
-        Ok(vec![(Time::from_micros(0), obj_id, Action::Event(0))])
+        Ok(vec![(self.start_time, obj_id, Action::Event(0))])
     }
 
     fn push(
@@ -126,6 +162,10 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             assert!(self.last_sent >= self.last_acked);
             assert!(ack_seq > self.last_acked);
             assert!(ack_seq <= self.last_sent);
+            if self.has_ended(now) {
+                return Ok(Vec::new());
+            }
+
             let rtt = now - sent_time;
             let num_lost = ack_seq - self.last_acked - 1;
             self.last_acked = ack_seq;
@@ -152,6 +192,10 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
         uid: u64,
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         assert_eq!(obj_id, from);
+        if self.has_ended(now) {
+            return Ok(Vec::new());
+        }
+
         if uid == 0 {
             // A transmission was scheduled
             self.tx_scheduled = false;
