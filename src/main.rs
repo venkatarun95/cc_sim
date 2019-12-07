@@ -69,7 +69,7 @@ fn main() -> Result<(), Error> {
             sender_addr,
             acker_addr,
             Instant::default(),
-            Time::from_micros(i as u64 * 1_000_000),
+            Time::from_secs(i as u64),
             TcpSenderTxLength::Infinite,
             &tracer,
         );
@@ -83,7 +83,7 @@ fn main() -> Result<(), Error> {
     // Register router (after registering the TCP senders)
     sched.register_obj(Box::new(router));
 
-    sched.simulate(Some(Time::from_micros(100_000_000)))?;
+    sched.simulate(Some(Time::from_secs(25)))?;
 
     tracer.finalize();
 

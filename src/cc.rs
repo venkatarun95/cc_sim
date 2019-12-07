@@ -75,6 +75,8 @@ impl Default for Instant {
 // ATT account number 4361 5082 2804
 impl CongestionControl for Instant {
     fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, rtt: Time, num_lost: u64) {
+        // What is the maximum multiplicative increase in cwnd per RTT
+        let max_incr = 1.5;
         if rtt < self.rtt_min {
             self.rtt_min = rtt;
         }
@@ -103,7 +105,7 @@ impl CongestionControl for Instant {
 
         if queue_del == 0 {
             // Negligible queuing. Double
-            self.cwnd *= 2.;
+            self.cwnd *= max_incr;
         } else {
             // The actual bdp is achieved_bdp * rtt_min / rtt to compensate for the fact that, with
             // larger RTTs we measure bigger bdps. Note, the rtt term in the numerator appears
@@ -124,9 +126,9 @@ impl CongestionControl for Instant {
                 self.cwnd * (self.rtt_min.micros() as f64 / (queue_del as f64 * k)).sqrt();
 
             // Limit growth to doubling once per RTT
-            if new_cwnd > self.cwnd * 2. {
+            if new_cwnd > self.cwnd * max_incr {
                 // Still well below target. Double
-                self.cwnd *= 2.;
+                self.cwnd *= max_incr;
             } else {
                 self.cwnd = new_cwnd;
             }
