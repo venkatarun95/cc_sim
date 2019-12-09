@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::simulator::*;
 use crate::tracer::{TraceElem, Tracer};
 
@@ -58,15 +59,15 @@ pub struct TcpSender<'a, C: CongestionControl + 'static> {
     /// How much should it transmit
     tx_length: TcpSenderTxLength,
     /// Tracer for events and measurements
-    tracer: &'a Tracer,
+    tracer: &'a Tracer<'a>,
+    config: &'a Config,
 }
 
 impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
-    const PACKET_SIZE: u64 = 1500;
-
     /// `next` is the next hop to which packets should be forwarded. `addr` is the destination the
     /// packet should be sent to.  `start_time` and `end_time` are the times at which the flow should
     /// start and end.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         next: NetObjId,
         addr: Addr,
@@ -75,6 +76,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
         start_time: Time,
         tx_length: TcpSenderTxLength,
         tracer: &'a Tracer,
+        config: &'a Config,
     ) -> Self {
         Self {
             next,
@@ -91,6 +93,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
             start_time,
             tx_length,
             tracer,
+            config,
         }
     }
 
@@ -98,7 +101,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
     fn has_ended(&self, now: Time) -> bool {
         match self.tx_length {
             TcpSenderTxLength::Duration(time) => self.start_time + time < now,
-            TcpSenderTxLength::Bytes(bytes) => self.last_sent * Self::PACKET_SIZE >= bytes,
+            TcpSenderTxLength::Bytes(bytes) => self.last_sent * self.config.pkt_size >= bytes,
             TcpSenderTxLength::Infinite => false,
         }
     }
@@ -109,7 +112,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
         let pkt = Packet {
             uid: get_next_pkt_seq_num(),
             sent_time: now,
-            size: Self::PACKET_SIZE,
+            size: self.config.pkt_size,
             dest: self.dest,
             src: self.addr,
             ptype: PacketType::Data {
@@ -230,7 +233,6 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             // It was a timeout we scheduled. See if it is still relevant
             let timeout = self.srtt + Time::from_micros(4 * self.rttvar.micros());
             if self.last_ack_time + timeout <= now {
-                //println!("Timeout at {}", now);
                 // It was a timeout
                 self.cc.on_timeout();
 

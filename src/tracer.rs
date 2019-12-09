@@ -67,8 +67,8 @@ impl LinkBucket {
     }
 }
 
-pub struct Tracer {
-    config: Config,
+pub struct Tracer<'a> {
+    config: &'a Config,
     /// Drain to pass values to
     cwnds: RefCell<HashMap<NetObjId, Vec<(Time, u64)>>>,
     rtts: RefCell<HashMap<NetObjId, Vec<(Time, Time)>>>,
@@ -77,8 +77,8 @@ pub struct Tracer {
     link_stats: RefCell<HashMap<NetObjId, Vec<LinkBucket>>>,
 }
 
-impl Tracer {
-    pub fn new(config: Config) -> Self {
+impl<'a> Tracer<'a> {
+    pub fn new(config: &'a Config) -> Self {
         Self {
             config,
             cwnds: Default::default(),
@@ -219,7 +219,7 @@ impl Tracer {
                     .map(|(t, r)| {
                         (
                             t.millis(),
-                            std::cmp::min(r, &Time::from_millis(500)).millis(),
+                            std::cmp::min(r, &Time::from_millis(4000)).millis(),
                         )
                     })
                     .unzip();
@@ -259,9 +259,10 @@ impl Tracer {
                     })
                     .collect();
 
-                ax.lines(
+                ax.fill_between(
                     &times,
                     &capacity,
+                    &vec![0; times.len()],
                     &[gnuplot::Caption("Capacity"), gnuplot::LineWidth(4.)],
                 );
                 ax.lines(

@@ -186,7 +186,7 @@ pub struct Link<'a> {
     /// The packets currently in the link (either queued or being served)
     buffer: VecDeque<Rc<Packet>>,
     /// To trace link events
-    tracer: &'a Tracer,
+    tracer: &'a Tracer<'a>,
     config: &'a Config,
 }
 

@@ -28,11 +28,11 @@ fn main() -> Result<(), Error> {
             sender_losses: LogType::Ignore,
             timeouts: LogType::Ignore,
             link_rates: LogType::Plot,
-            link_bucket_size: Time::from_micros(1000_000),
+            link_bucket_size: Time::from_micros(1_000_000),
         },
     };
 
-    let tracer = Tracer::new(config.clone());
+    let tracer = Tracer::new(&config);
     let mut sched = Scheduler::default();
 
     // Topology: n senders -> link -> delay -> acker -> router -> original senders
@@ -81,6 +81,7 @@ fn main() -> Result<(), Error> {
             Time::from_secs(i as u64),
             TcpSenderTxLength::Infinite,
             &tracer,
+            &config,
         );
         let port = router.add_port(tcp_sender_id_start + i);
         router.add_route(sender_addr, port);
