@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::simulator::*;
 use crate::tracer::{TraceElem, Tracer};
 
@@ -76,115 +77,49 @@ impl NetObj for Router {
     }
 }
 
-pub struct Link {
-    /// Speed of the link in bytes per second
-    rate: u64,
-    /// Maximum number of packets that can be buffered
-    bufsize: usize,
-    /// The next hop which will receve packets
-    next: NetObjId,
-    /// The packets currently in the link (either queued or being served)
-    buffer: VecDeque<Rc<Packet>>,
-}
-
-impl Link {
-    /// Link rate in bytes/sec and buffer size in packets
+/// Link speed as a function of time.
+pub enum LinkTrace<'c> {
+    /// A constant link rate in bytes per second
     #[allow(dead_code)]
-    pub fn new(rate: u64, bufsize: usize, next: NetObjId) -> Self {
-        Self {
-            rate,
-            bufsize,
-            next,
-            buffer: Default::default(),
-        }
-    }
+    Const { rate: f64, config: &'c Config },
+    /// A piecewise-constant link rate. Give the rate and duration for which it applies in bytes
+    /// per second. Loops after it reaches the end.
+    #[allow(dead_code)]
+    Piecewise {
+        rates: Vec<(f64, Time)>,
+        /// The current rate at which we are operating
+        cur_id: usize,
+        /// When to switch to the next rate
+        next_switch: Time,
+        config: &'c Config,
+    },
+    #[allow(dead_code)]
+    /// A mahimahi-like trace (it also handles floating-point values)
+    Mahimahi { trace: Vec<Time>, next_id: usize },
 }
 
-impl NetObj for Link {
-    fn init(
-        &mut self,
-        _obj_id: NetObjId,
-        _now: Time,
-    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
-        Ok(Vec::new())
+impl<'c> LinkTrace<'c> {
+    #[allow(dead_code)]
+    pub fn new_const(rate: f64, config: &'c Config) -> Self {
+        Self::Const { rate, config }
     }
 
-    fn push(
-        &mut self,
-        obj_id: NetObjId,
-        _from: NetObjId,
-        now: Time,
-        pkt: Rc<Packet>,
-    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
-        // If buffer already full, drop packet
-        if self.buffer.len() >= self.bufsize {
-            assert_eq!(self.buffer.len(), self.bufsize);
-            return Ok(Vec::new());
-        }
-
-        // Add packet to buffer
-        self.buffer.push_back(pkt.clone());
-
-        // If buffer was previously empty, schedule an event to deque it. Else such an event would
-        // already have been scheduled
-        if self.buffer.len() == 1 {
-            let send_time = Time::from_micros(now.micros() + 1_000_000 * pkt.size / self.rate);
-            Ok(vec![(send_time, obj_id, Action::Event(0))])
-        } else {
-            Ok(Vec::new())
+    /// A piecewise constant link rate trace. Give a list of rates along with how long they should
+    /// last. Loops after it reaches the end
+    #[allow(dead_code)]
+    pub fn new_piecewise(rates: Vec<(f64, Time)>, config: &'c Config) -> Self {
+        assert!(!rates.is_empty());
+        Self::Piecewise {
+            next_switch: rates[0].1,
+            rates,
+            cur_id: 0,
+            config,
         }
     }
 
-    fn event(
-        &mut self,
-        obj_id: NetObjId,
-        from: NetObjId,
-        now: Time,
-        _uid: u64,
-    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
-        assert_eq!(obj_id, from);
-        assert!(!self.buffer.len() != 0);
-        // Send packet to next hop
-        let mut res = vec![(
-            now,
-            self.next,
-            Action::Push(self.buffer.pop_front().unwrap()),
-        )];
-
-        // If needed, schedule for transmission of the next packet
-        if !self.buffer.is_empty() {
-            let size = self.buffer.front().unwrap().size;
-            let send_time = Time::from_micros(now.micros() + 1_000_000 * size / self.rate);
-            res.push((send_time, obj_id, Action::Event(0)))
-        }
-        Ok(res)
-    }
-}
-
-/// A mahimahi trace compatible link
-pub struct LinkMM<'a> {
-    /// A trace of timestamps at which to forward packets, which repeats cyclically
-    trace: Vec<Time>,
-    /// The next position (in `trace`) at which to transmit a packet
-    next_id: usize,
-    /// Maximum number of packets that can be buffered
-    bufsize: usize,
-    /// The next hop which will receve packets
-    next: NetObjId,
-    /// The packets currently in the link (either queued or being served)
-    buffer: VecDeque<Rc<Packet>>,
-    /// To trace link events
-    tracer: &'a Tracer,
-}
-
-impl<'a> LinkMM<'a> {
-    /// Link rate in bytes/sec and buffer size in packets
-    pub fn new(
-        tracefile: &std::path::Path,
-        bufsize: usize,
-        next: NetObjId,
-        tracer: &'a Tracer,
-    ) -> Result<Self, Error> {
+    /// Create a trace reading from a mahimahi-like trace file (also supports floating point)
+    #[allow(dead_code)]
+    pub fn new_mahimahi_from_file(tracefile: &std::path::Path) -> Result<Self, Error> {
         // Read the trace file
         use std::fs::File;
         use std::io::{BufRead, BufReader};
@@ -193,7 +128,7 @@ impl<'a> LinkMM<'a> {
         let mut last_ts = Time::from_micros(0);
         for line in file.lines() {
             let line = line?;
-            let ts = Time::from_micros(line.parse::<u64>()? * 1000);
+            let ts = Time::from_micros((line.parse::<f64>()? * 1000.) as u64);
             if ts < last_ts {
                 return Err(format_err!(
                     "Error: tracefile is not monotonic at line {}",
@@ -204,18 +139,79 @@ impl<'a> LinkMM<'a> {
             last_ts = ts;
         }
 
-        Ok(Self {
-            trace,
-            next_id: 0,
+        Ok(Self::Mahimahi { trace, next_id: 0 })
+    }
+
+    /// Give the next scheduled transmit time assuming full-sized packets are used. Expects `now`
+    /// to be non-decreasing
+    fn next_tx(&mut self, now: Time) -> Time {
+        match self {
+            Self::Const { rate, config } => Time::from_micros(
+                (now.micros() as f64 + (1_000_000. * config.pkt_size as f64 / *rate)) as u64,
+            ),
+            Self::Piecewise {
+                rates,
+                cur_id,
+                next_switch,
+                config,
+            } => {
+                if now > *next_switch {
+                    *cur_id = (*cur_id + 1) % rates.len();
+                    *next_switch = *next_switch + rates[*cur_id].1;
+                }
+                let rate = rates[*cur_id].0;
+                Time::from_micros(
+                    (now.micros() as f64 + (1_000_000. * config.pkt_size as f64 / rate)) as u64,
+                )
+            }
+            Self::Mahimahi { trace, next_id } => {
+                let prev_id = if *next_id > 0 { *next_id - 1 } else { 0 };
+                let next_tx_time = now + trace[*next_id] - trace[prev_id];
+                *next_id = (*next_id + 1) % trace.len();
+                next_tx_time
+            }
+        }
+    }
+}
+
+/// A link whose rate can be configured with LinkTrace
+#[allow(dead_code)]
+pub struct Link<'a> {
+    /// This tells us of transmit opportunities
+    link_trace: LinkTrace<'a>,
+    /// Maximum number of packets that can be buffered
+    bufsize: usize,
+    /// The next hop which will receve packets
+    next: NetObjId,
+    /// The packets currently in the link (either queued or being served)
+    buffer: VecDeque<Rc<Packet>>,
+    /// To trace link events
+    tracer: &'a Tracer,
+    config: &'a Config,
+}
+
+#[allow(dead_code)]
+impl<'a> Link<'a> {
+    /// Link rate in bytes/sec and buffer size in packets
+    pub fn new(
+        link_trace: LinkTrace<'a>,
+        bufsize: usize,
+        next: NetObjId,
+        tracer: &'a Tracer,
+        config: &'a Config,
+    ) -> Self {
+        Self {
+            link_trace,
             bufsize,
             next,
             buffer: Default::default(),
             tracer,
-        })
+            config,
+        }
     }
 }
 
-impl<'a> NetObj for LinkMM<'a> {
+impl<'a> NetObj for Link<'a> {
     fn init(
         &mut self,
         obj_id: NetObjId,
@@ -249,24 +245,26 @@ impl<'a> NetObj for LinkMM<'a> {
         assert_eq!(uid, 0);
 
         // Schedule the next transmission
-        let prev_id = if self.next_id > 0 {
-            self.next_id - 1
-        } else {
-            0
-        };
-        let next_tx_time = now + self.trace[self.next_id] - self.trace[prev_id];
-        self.next_id = (self.next_id + 1) % self.trace.len();
+        let next_tx_time = self.link_trace.next_tx(now);
         let next_tx = (next_tx_time, obj_id, Action::Event(0));
 
         self.tracer.log(from, now, TraceElem::LinkTxOpportunity);
 
-        // If there are packets, then transmit it
-        if let Some(pkt) = self.buffer.pop_front() {
+        // If there are packets, then transmit it. We are allowed to transmit config.pkt_size bytes
+        // of data
+        let mut num_txed = 0;
+        let mut res = vec![next_tx];
+        while let Some(pkt) = self.buffer.front() {
+            assert!(pkt.size <= self.config.pkt_size);
+            if num_txed + pkt.size > self.config.pkt_size {
+                break;
+            }
+            let pkt = self.buffer.pop_front().unwrap();
+            num_txed += pkt.size;
             self.tracer.log(from, now, TraceElem::LinkEgress(pkt.size));
-            Ok(vec![next_tx, (now, self.next, Action::Push(pkt))])
-        } else {
-            Ok(vec![next_tx])
+            res.push((now, self.next, Action::Push(pkt)));
         }
+        Ok(res)
     }
 }
 

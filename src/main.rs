@@ -14,9 +14,12 @@ use transport::*;
 
 use failure::Error;
 
+use std::path::Path;
+
 fn main() -> Result<(), Error> {
     // Create configuration
     let config = Config {
+        pkt_size: 1500,
         log: ConfigLog {
             out_terminal: "png".to_string(),
             out_file: "out.png".to_string(),
@@ -25,7 +28,7 @@ fn main() -> Result<(), Error> {
             sender_losses: LogType::Ignore,
             timeouts: LogType::Ignore,
             link_rates: LogType::Plot,
-            link_bucket_size: Time::from_micros(100_000),
+            link_bucket_size: Time::from_micros(1000_000),
         },
     };
 
@@ -33,7 +36,7 @@ fn main() -> Result<(), Error> {
     let mut sched = Scheduler::default();
 
     // Topology: n senders -> link -> delay -> acker -> router -> original senders
-    let num_senders = 5;
+    let num_senders = 3;
 
     // Scheduler promises to allocate NetObjId in ascending order in increments of one. So we can
     // determine the ids each object will be assigned
@@ -43,15 +46,21 @@ fn main() -> Result<(), Error> {
     let tcp_sender_id_start = acker_id + 1;
     let router_id = tcp_sender_id_start + num_senders;
 
+    // Link trace types to choose from
+    let _c_link_trace = LinkTrace::new_const(15_000_000., &config);
+    let _p_link_trace = LinkTrace::new_piecewise(
+        vec![
+            (1_500_000., Time::from_secs(20)),
+            (15_000_000., Time::from_secs(20)),
+        ],
+        &config,
+    );
+    let _m_link_trace =
+        LinkTrace::new_mahimahi_from_file(Path::new("traces/TMobile-LTE-driving.up"))?;
+
     // Create network core
-    //let link = Link::new(1_500_000, 10000, delay_id);
-    let link = LinkMM::new(
-        std::path::Path::new("traces/ATT-LTE-driving.down"),
-        1000,
-        delay_id,
-        &tracer,
-    )?;
-    let delay = Delay::new(Time::from_millis(20), acker_id);
+    let link = Link::new(_p_link_trace, 20000, delay_id, &tracer, &config);
+    let delay = Delay::new(Time::from_millis(200), acker_id);
     let acker_addr = sched.next_addr();
     let acker = Acker::new(acker_addr, router_id);
     let mut router = Router::new(sched.next_addr());

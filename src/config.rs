@@ -4,6 +4,8 @@ use crate::simulator::Time;
 
 #[derive(Clone, Debug)]
 pub struct Config {
+    /// Number of bytes in data packets
+    pub pkt_size: u64,
     pub log: ConfigLog,
 }
 
