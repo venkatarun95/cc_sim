@@ -76,7 +76,7 @@ impl Default for Instant {
 impl CongestionControl for Instant {
     fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, rtt: Time, num_lost: u64) {
         // What is the maximum multiplicative increase in cwnd per RTT
-        let max_incr = 1.5;
+        let max_incr = 2.;
         if rtt < self.rtt_min {
             self.rtt_min = rtt;
         }
@@ -107,6 +107,8 @@ impl CongestionControl for Instant {
             // Negligible queuing. Double
             self.cwnd *= max_incr;
         } else {
+            self.rtt_min = Time::from_millis(200);
+
             // The actual bdp is achieved_bdp * rtt_min / rtt to compensate for the fact that, with
             // larger RTTs we measure bigger bdps. Note, the rtt term in the numerator appears
             // because (cwnd = target rate * current rtt)
@@ -114,16 +116,15 @@ impl CongestionControl for Instant {
             // Original target was alpha * RTT / queuingdelay), same as in copa, before picking
             // alpha for stability. The constant 'k' should be bigger than 1 / (pi/2 - 1)
 
-            // let new_cwnd =
-            //     k * self.achieved_bdp.unwrap() as f64 * self.rtt_min.micros() as f64
-            //         / queue_del as f64;
+            // let k = 2.5;
+            // let new_cwnd = k * (self.cwnd + 1.) * self.rtt_min.micros() as f64 / queue_del as f64;
 
             // Original target was alpha * RTT / sqrt(queuing delay). After finding the
             // right alpha we get the following for the constant 'k', which should be less than (1
             // + pi) for stability
-            let k = 2.;
-            self.rtt_min = Time::from_millis(20);
-            let new_cwnd = (self.cwnd + self.cwnd.sqrt() + 1.)
+
+            let k = 1.;
+            let new_cwnd = (self.cwnd + self.cwnd.sqrt() + 10.)
                 * (self.rtt_min.micros() as f64 / (queue_del as f64 * k)).sqrt();
 
             // Limit growth to doubling once per RTT
