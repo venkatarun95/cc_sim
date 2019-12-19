@@ -72,6 +72,9 @@ impl std::ops::Sub for Time {
 }
 
 impl Time {
+    pub const MAX: Time = Time(std::u64::MAX);
+    pub const ZERO: Time = Time(0);
+
     pub fn from_micros(micros: u64) -> Self {
         Time(micros)
     }

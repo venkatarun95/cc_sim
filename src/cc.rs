@@ -1,7 +1,7 @@
 use crate::simulator::{SeqNum, Time};
 use crate::transport::CongestionControl;
 
-use std::cmp::min;
+use std::cmp::{max, min};
 
 #[allow(dead_code)]
 pub struct AIMD {
@@ -42,7 +42,7 @@ impl CongestionControl for AIMD {
 }
 
 #[allow(dead_code)]
-pub struct Instant {
+pub struct InstantCC {
     cwnd: f64,
     rtt_min: Time,
     /// The last packet seq_num that was sent
@@ -59,7 +59,7 @@ pub struct Instant {
     achieved_bdp: Option<u64>,
 }
 
-impl Default for Instant {
+impl Default for InstantCC {
     fn default() -> Self {
         Self {
             cwnd: 1.,
@@ -73,7 +73,7 @@ impl Default for Instant {
 }
 
 // ATT account number 4361 5082 2804
-impl CongestionControl for Instant {
+impl CongestionControl for InstantCC {
     fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, rtt: Time, num_lost: u64) {
         // What is the maximum multiplicative increase in cwnd per RTT
         let max_incr = 2.;
@@ -165,6 +165,142 @@ impl CongestionControl for Instant {
 
     fn get_cwnd(&mut self) -> u64 {
         self.cwnd as u64
+    }
+
+    fn get_intersend_time(&mut self) -> Time {
+        Time::from_micros(0)
+    }
+}
+
+pub struct OscInstantCC {
+    /// Latest time we are aware of (may not be the best way to determine this)
+    now: Time,
+    /// The current base congestion window
+    b: f64,
+    /// Minimum RTT ever seen so far
+    rtt_min: Time,
+    /// Minimum RTT in last observation window
+    rtt_min_win: Time,
+    /// Maximum RTT in last observation window
+    rtt_max_win: Time,
+    /// The observation time
+    last_obs_time: Time,
+    /// The last time b was reduced due to loss. Only reduce once per RTT
+    last_loss_reduction: Time,
+    /// Estimate of the BDP (in packets). We start estimating when a marker packet is sent and
+    /// finish when it is received. Format: (number of acked packets, sequence number of marker
+    /// packet)
+    bdp_est: Option<(u64, SeqNum)>,
+    /// The latest BDP estimate (and hence is never None)
+    last_bdp_est: u64,
+    /// Last time
+    /// Parameter that controls stability
+    k: f64,
+    /// Oscillation frequency: cwnd = b + a * sin(omega * t)
+    omega: f64,
+}
+
+impl Default for OscInstantCC {
+    fn default() -> Self {
+        Self {
+            now: Time::from_micros(0),
+            b: 1.,
+            rtt_min: Time::MAX,
+            rtt_min_win: Time::MAX,
+            rtt_max_win: Time::ZERO,
+            last_obs_time: Time::ZERO,
+            last_loss_reduction: Time::ZERO,
+            bdp_est: None,
+            last_bdp_est: 1,
+            k: 4.,
+            omega: 10. * 6.28,
+        }
+    }
+}
+
+impl OscInstantCC {
+    fn get_s(&self) -> f64 {
+        let k = self.k;
+        (k + 1. - (2. * k).sqrt()) / k
+    }
+}
+
+impl CongestionControl for OscInstantCC {
+    fn on_ack(&mut self, now: Time, ack_seq: SeqNum, rtt: Time, num_lost: u64) {
+        assert!(self.now <= now);
+        self.now = now;
+
+        // Do BDP estimation
+        if let Some((ref mut cur_num_pkts, seq_num)) = self.bdp_est {
+            *cur_num_pkts += 1;
+            if seq_num < ack_seq {
+                self.last_bdp_est =
+                    (*cur_num_pkts as f64 * self.rtt_min.secs() / rtt.secs()) as u64;
+                self.bdp_est = None;
+            }
+        }
+
+        // If lost, reduce multiplicatively
+        if num_lost > 0 && now + rtt > self.last_loss_reduction {
+            self.b /= 2.;
+            self.last_loss_reduction = now;
+            return;
+        }
+
+        // We update only once every num_time_periods
+        let num_time_periods = 2.;
+        if now
+            < self.last_obs_time
+                + Time::from_micros((num_time_periods * 6.28e6 / self.omega) as u64)
+        {
+            // Make note of RTT
+            self.rtt_min = min(self.rtt_min, rtt);
+            self.rtt_min_win = min(self.rtt_min_win, rtt);
+            self.rtt_max_win = max(self.rtt_max_win, rtt);
+            return;
+        }
+        self.last_obs_time = now;
+
+        if self.rtt_min_win == Time::MAX || self.rtt_max_win == Time::ZERO {
+            println!("Warning: No measurements in window");
+            return;
+        }
+
+        let d_osc = self.rtt_max_win - self.rtt_min_win;
+        let b_target = (self.last_bdp_est + 1) as f64 * self.rtt_min.secs() * self.k / d_osc.secs();
+        println!("{} {} {}", self.b, b_target, self.last_bdp_est);
+
+        // Set b to b_target
+        if 2. * self.b < b_target {
+            self.b *= 2.;
+        } else {
+            self.b = b_target;
+        }
+
+        // Reset the windowed RTT estimates
+        self.rtt_min_win = Time::MAX;
+        self.rtt_max_win = Time::ZERO;
+    }
+
+    fn on_send(&mut self, now: Time, seq_num: SeqNum) {
+        assert!(self.now <= now);
+        self.now = now;
+
+        // Start BDP estimate if needed
+        if self.bdp_est.is_none() {
+            self.bdp_est = Some((0, seq_num));
+        }
+    }
+
+    fn on_timeout(&mut self) {}
+
+    fn get_cwnd(&mut self) -> u64 {
+        let cwnd = self.b * (1. + self.get_s() * (self.omega * self.now.secs()).sin());
+        if cwnd < 1. {
+            1
+        } else {
+            cwnd as u64
+        }
     }
 
     fn get_intersend_time(&mut self) -> Time {
