@@ -221,7 +221,7 @@ impl Default for OscInstantCC {
 impl OscInstantCC {
     fn get_s(&self) -> f64 {
         let k = self.k;
-        (k + 1. - (2. * k).sqrt()) / k
+        (k + 1. - (2. * k + 1.).sqrt()) / k
     }
 }
 
