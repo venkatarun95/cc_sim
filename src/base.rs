@@ -1,10 +1,11 @@
-use crate::config::Config;
+use crate::config::{Config, LinkTraceConfig};
 use crate::simulator::*;
 use crate::tracer::{TraceElem, Tracer};
 
 use failure::{format_err, Error};
 use fnv::FnvHashMap;
 use std::collections::VecDeque;
+use std::path::Path;
 use std::rc::Rc;
 
 /// A router with configurable routes
@@ -107,11 +108,11 @@ impl<'c> LinkTrace<'c> {
     /// A piecewise constant link rate trace. Give a list of rates along with how long they should
     /// last. Loops after it reaches the end
     #[allow(dead_code)]
-    pub fn new_piecewise(rates: Vec<(f64, Time)>, config: &'c Config) -> Self {
+    pub fn new_piecewise(rates: &[(f64, Time)], config: &'c Config) -> Self {
         assert!(!rates.is_empty());
         Self::Piecewise {
             next_switch: rates[0].1,
-            rates,
+            rates: rates.to_vec(),
             cur_id: 0,
             config,
         }
@@ -140,6 +141,15 @@ impl<'c> LinkTrace<'c> {
         }
 
         Ok(Self::Mahimahi { trace, next_id: 0 })
+    }
+
+    /// Produces a LinkTrace from LinkTraceConfig and a separately provided Config
+    pub fn from_config(link_config: &LinkTraceConfig, config: &'c Config) -> Result<Self, Error> {
+        Ok(match link_config {
+            LinkTraceConfig::Const(rate) => Self::new_const(*rate, config),
+            LinkTraceConfig::Piecewise(rates) => Self::new_piecewise(rates, config),
+            LinkTraceConfig::MahimahiFile(fname) => Self::new_mahimahi_from_file(Path::new(fname))?,
+        })
     }
 
     /// Give the next scheduled transmit time assuming full-sized packets are used. Expects `now`
@@ -179,8 +189,8 @@ impl<'c> LinkTrace<'c> {
 pub struct Link<'a> {
     /// This tells us of transmit opportunities
     link_trace: LinkTrace<'a>,
-    /// Maximum number of packets that can be buffered
-    bufsize: usize,
+    /// Maximum number of packets that can be buffered. If `None`, creates an infinite buffer
+    bufsize: Option<usize>,
     /// The next hop which will receve packets
     next: NetObjId,
     /// The packets currently in the link (either queued or being served)
@@ -192,10 +202,10 @@ pub struct Link<'a> {
 
 #[allow(dead_code)]
 impl<'a> Link<'a> {
-    /// Link rate in bytes/sec and buffer size in packets
+    /// Link rate in bytes/sec and buffer size in packets (if `None`, buffer is infinite)
     pub fn new(
         link_trace: LinkTrace<'a>,
-        bufsize: usize,
+        bufsize: Option<usize>,
         next: NetObjId,
         tracer: &'a Tracer,
         config: &'a Config,
@@ -229,9 +239,12 @@ impl<'a> NetObj for Link<'a> {
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         self.tracer
             .log(obj_id, now, TraceElem::LinkIngress(pkt.src, pkt.size));
-        if self.buffer.len() < self.bufsize {
-            self.buffer.push_back(pkt);
+        if let Some(bufsize) = self.bufsize {
+            if self.buffer.len() >= bufsize {
+                return Ok(Vec::new());
+            }
         }
+        self.buffer.push_back(pkt);
         Ok(Vec::new())
     }
 

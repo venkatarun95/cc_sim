@@ -2,24 +2,53 @@ mod base;
 mod cc;
 mod config;
 mod simulator;
+mod topology;
 mod tracer;
 mod transport;
 
-use base::*;
-use cc::*;
-use config::{Config, ConfigLog, LogType};
+use config::{
+    CCConfig, Config, ConfigLog, ConfigTopo, LinkTraceConfig, LogType, SenderGroupConfig,
+};
 use simulator::*;
+use topology::create_topology;
 use tracer::Tracer;
 use transport::*;
 
 use failure::Error;
 
-use std::path::Path;
-
 fn main() -> Result<(), Error> {
+    // Three variants of links to choose from
+    let _c_link_trace = LinkTraceConfig::Const(15_000_000.);
+    let _p_link_trace = LinkTraceConfig::Piecewise(vec![
+        (1_500_000., Time::from_secs(20)),
+        (15_000_000., Time::from_secs(20)),
+    ]);
+    let _m_link_trace = LinkTraceConfig::MahimahiFile("traces/TMobile-LTE-driving.up".to_string());
+
+    // Configure senders
+    let mut sender_groups = Vec::new();
+    for i in 0..2 {
+        sender_groups.push(SenderGroupConfig {
+            num_senders: 1,
+            delay: Time::from_millis(50),
+            cc: CCConfig::OscInstantCC {
+                k: 2.,
+                omega: 6.28 * 1.,
+            },
+            start_time: Time::from_secs(i * 2),
+            tx_length: TcpSenderTxLength::Infinite,
+        });
+    }
+
     // Create configuration
     let config = Config {
         pkt_size: 1500,
+        sim_dur: Some(Time::from_secs(100)),
+        topo: ConfigTopo {
+            link: _c_link_trace,
+            bufsize: None,
+            sender_groups,
+        },
         log: ConfigLog {
             out_terminal: "png".to_string(),
             out_file: "out.png".to_string(),
@@ -33,67 +62,9 @@ fn main() -> Result<(), Error> {
     };
 
     let tracer = Tracer::new(&config);
-    let mut sched = Scheduler::default();
+    let mut sched = create_topology(&config, &tracer)?;
 
-    // Topology: n senders -> link -> delay -> acker -> router -> original senders
-    let num_senders = 3;
-
-    // Scheduler promises to allocate NetObjId in ascending order in increments of one. So we can
-    // determine the ids each object will be assigned
-    let link_id = sched.next_obj_id();
-    let delay_id = link_id + 1;
-    let acker_id = delay_id + 1;
-    let tcp_sender_id_start = acker_id + 1;
-    let router_id = tcp_sender_id_start + num_senders;
-
-    // Link trace types to choose from
-    let _c_link_trace = LinkTrace::new_const(15_000_000., &config);
-    let _p_link_trace = LinkTrace::new_piecewise(
-        vec![
-            (1_500_000., Time::from_secs(20)),
-            (15_000_000., Time::from_secs(20)),
-        ],
-        &config,
-    );
-    let _m_link_trace =
-        LinkTrace::new_mahimahi_from_file(Path::new("traces/TMobile-LTE-driving.up"))?;
-
-    // Create network core
-    let link = Link::new(_p_link_trace, 20000, delay_id, &tracer, &config);
-    let delay = Delay::new(Time::from_millis(200), acker_id);
-    let acker_addr = sched.next_addr();
-    let acker = Acker::new(acker_addr, router_id);
-    let mut router = Router::new(sched.next_addr());
-
-    // Register the core objects. Remember to do it in the same order as the ids
-    sched.register_obj(Box::new(link));
-    sched.register_obj(Box::new(delay));
-    sched.register_obj(Box::new(acker));
-
-    // Create TCP senders and add routes to router
-    for i in 0..num_senders {
-        let sender_addr = sched.next_addr();
-        let tcp_sender = TcpSender::new(
-            link_id,
-            sender_addr,
-            acker_addr,
-            Instant::default(),
-            Time::from_secs(i as u64),
-            TcpSenderTxLength::Infinite,
-            &tracer,
-            &config,
-        );
-        let port = router.add_port(tcp_sender_id_start + i);
-        router.add_route(sender_addr, port);
-
-        // Register the TCP sender
-        sched.register_obj(Box::new(tcp_sender));
-    }
-
-    // Register router (after registering the TCP senders)
-    sched.register_obj(Box::new(router));
-
-    sched.simulate(Some(Time::from_secs(100)))?;
+    sched.simulate(config.sim_dur)?;
 
     tracer.finalize();
 
