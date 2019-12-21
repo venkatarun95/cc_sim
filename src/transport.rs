@@ -21,8 +21,30 @@ pub trait CongestionControl {
     fn get_intersend_time(&mut self) -> Time;
 }
 
+impl CongestionControl for Box<dyn CongestionControl> {
+    fn on_ack(&mut self, now: Time, ack_seq: SeqNum, rtt: Time, num_lost: u64) {
+        (**self).on_ack(now, ack_seq, rtt, num_lost)
+    }
+    /// Called each time a packet is sent
+    fn on_send(&mut self, now: Time, seq_num: SeqNum) {
+        (**self).on_send(now, seq_num)
+    }
+    fn on_timeout(&mut self) {
+        (**self).on_timeout()
+    }
+    /// The congestion window (in packets)
+    fn get_cwnd(&mut self) -> u64 {
+        (**self).get_cwnd()
+    }
+    /// Returns the minimum interval between any two transmitted packets
+    fn get_intersend_time(&mut self) -> Time {
+        (**self).get_intersend_time()
+    }
+}
+
 /// How long the TcpSender should send packets
 #[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
 pub enum TcpSenderTxLength {
     Duration(Time),
     Bytes(u64),
