@@ -23,20 +23,20 @@ fn main() -> Result<(), Error> {
         (1_500_000., Time::from_secs(20)),
         (15_000_000., Time::from_secs(20)),
     ]);
-    let _m_link_trace = LinkTraceConfig::MahimahiFile("traces/TMobile-LTE-driving.up".to_string());
+    let _m_link_trace = LinkTraceConfig::MahimahiFile("traces/ATT-LTE-driving.up".to_string());
 
     // Configure senders
     let mut sender_groups = Vec::new();
     for i in 0..2 {
         sender_groups.push(SenderGroupConfig {
             num_senders: 1,
-            delay: Time::from_millis(50),
+            delay: Time::from_millis(100),
             cc: CCConfig::OscInstantCC {
-                k: 2.,
-                omega: 6.28 * 1.,
+                k: 1.,
+                omega: 6.28 * 10.,
             },
-            start_time: Time::from_secs(i * 2),
-            tx_length: TcpSenderTxLength::Infinite,
+            start_time: Time::from_secs(i * 10),
+            tx_length: TcpSenderTxLength::Duration(Time::from_secs(100 - i * 20)),
         });
     }
 
@@ -45,19 +45,19 @@ fn main() -> Result<(), Error> {
         pkt_size: 1500,
         sim_dur: Some(Time::from_secs(100)),
         topo: ConfigTopo {
-            link: _c_link_trace,
-            bufsize: None,
+            link: _m_link_trace,
+            bufsize: Some(50),
             sender_groups,
         },
         log: ConfigLog {
-            out_terminal: "png".to_string(),
+            out_terminal: "png size 600,400".to_string(),
             out_file: "out.png".to_string(),
             cwnd: LogType::Plot,
             rtt: LogType::Plot,
             sender_losses: LogType::Ignore,
             timeouts: LogType::Ignore,
             link_rates: LogType::Plot,
-            link_bucket_size: Time::from_micros(1_000_000),
+            link_bucket_size: Time::from_millis(200),
         },
     };
 

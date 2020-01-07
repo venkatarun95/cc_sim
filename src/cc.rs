@@ -193,18 +193,17 @@ pub struct OscInstantCC {
     bdp_est: Option<(u64, SeqNum)>,
     /// The latest BDP estimate (and hence is never None)
     last_bdp_est: u64,
-    /// Last time
     /// Parameter that controls stability
     k: f64,
     /// Oscillation frequency: cwnd = b + a * sin(omega * t)
     omega: f64,
 }
 
-impl Default for OscInstantCC {
-    fn default() -> Self {
+impl OscInstantCC {
+    pub fn new(k: f64, omega: f64) -> Self {
         Self {
             now: Time::from_micros(0),
-            b: 1.,
+            b: 5.,
             rtt_min: Time::MAX,
             rtt_min_win: Time::MAX,
             rtt_max_win: Time::ZERO,
@@ -212,13 +211,11 @@ impl Default for OscInstantCC {
             last_loss_reduction: Time::ZERO,
             bdp_est: None,
             last_bdp_est: 1,
-            k: 4.,
-            omega: 10. * 6.28,
+            k,
+            omega,
         }
     }
-}
 
-impl OscInstantCC {
     fn get_s(&self) -> f64 {
         let k = self.k;
         (k + 1. - (2. * k + 1.).sqrt()) / k
@@ -247,12 +244,13 @@ impl CongestionControl for OscInstantCC {
             return;
         }
 
-        // We update only once every num_time_periods
+        // We update only once every num_time_periods or RTT
         let num_time_periods = 2.;
-        if now
-            < self.last_obs_time
-                + Time::from_micros((num_time_periods * 6.28e6 / self.omega) as u64)
-        {
+        let obs_interval = max(
+            rtt,
+            Time::from_micros((num_time_periods * 6.28e6 / self.omega) as u64),
+        );
+        if now < self.last_obs_time + obs_interval {
             // Make note of RTT
             self.rtt_min = min(self.rtt_min, rtt);
             self.rtt_min_win = min(self.rtt_min_win, rtt);
@@ -267,7 +265,8 @@ impl CongestionControl for OscInstantCC {
         }
 
         let d_osc = self.rtt_max_win - self.rtt_min_win;
-        let b_target = (self.last_bdp_est + 1) as f64 * self.rtt_min.secs() * self.k / d_osc.secs();
+        let bdp = self.last_bdp_est as f64;
+        let b_target = (bdp + bdp.sqrt() + 1.) * self.rtt_min.secs() * self.k / d_osc.secs();
         println!("{} {} {}", self.b, b_target, self.last_bdp_est);
 
         // Set b to b_target
@@ -275,6 +274,10 @@ impl CongestionControl for OscInstantCC {
             self.b *= 2.;
         } else {
             self.b = b_target;
+        }
+
+        if self.b < 5. {
+            self.b = 5.;
         }
 
         // Reset the windowed RTT estimates
