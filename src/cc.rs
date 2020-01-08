@@ -2,6 +2,7 @@ use crate::simulator::{SeqNum, Time};
 use crate::transport::CongestionControl;
 
 use std::cmp::{max, min};
+use std::collections::VecDeque;
 
 #[allow(dead_code)]
 pub struct AIMD {
@@ -308,5 +309,104 @@ impl CongestionControl for OscInstantCC {
 
     fn get_intersend_time(&mut self) -> Time {
         Time::from_micros(0)
+    }
+}
+
+/// The algorithm designed in `analysis/stable_linear_tcp_design.ipynb`
+pub struct StableLinearCC {
+    /// Configuration parameters
+    alpha: f64,
+    /// The constant that controls beta. Should be > pi/4 for stability. Ideally should also be <
+    /// pi/2 to ensure beta < 1 always holds
+    k: f64,
+    /// The current cwnd
+    cwnd: f64,
+    /// A historical record of cwnds when each unacked packet was sent (assumes no re-ordering)
+    cwnd_hist: VecDeque<(SeqNum, u64)>,
+    rtt_min: Time,
+}
+
+#[allow(dead_code)]
+impl StableLinearCC {
+    /// Currently takes RTTmin as an external parameter, since it doesn't oscillate to empty queues
+    /// periodically
+    pub fn new(alpha: f64, k: f64, rtt_min: Time) -> Self {
+        Self {
+            alpha,
+            k,
+            cwnd: 2.,
+            cwnd_hist: VecDeque::new(),
+            rtt_min,
+        }
+    }
+}
+
+impl CongestionControl for StableLinearCC {
+    fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, rtt: Time, num_lost: u64) {
+        // Primitive packet loss handling
+        if num_lost > 0 {
+            println!("Packet lost!");
+            self.cwnd = 2.;
+            return;
+        }
+
+        // Determine cwnd when this packet was sent and delete old values we don't need anymore
+        // Here we assume packets are not reordered. Else, unwrap will panic
+        let mut cwnd_old = None;
+        while ack_seq >= self.cwnd_hist.front().unwrap().0 {
+            cwnd_old = Some(self.cwnd_hist.front().unwrap().1);
+            self.cwnd_hist.pop_front();
+            if self.cwnd_hist.is_empty() {
+                break;
+            }
+        }
+        let cwnd_old = cwnd_old.unwrap();
+
+        // If the caller gave us an incorrect rtt_min value, panic
+        assert!(self.rtt_min <= rtt);
+
+        // Our estimate of the sending rate at the time
+        let mu_old = cwnd_old as f64 / rtt.secs();
+
+        // Compute the target window
+        let d_q = (rtt - self.rtt_min).secs();
+        let tau = rtt.secs() * self.alpha / (d_q * d_q);
+
+        // Find beta
+        let beta = 1.
+            - self.k * self.alpha.sqrt()
+                / (mu_old.sqrt() * self.rtt_min.secs() + self.alpha.sqrt());
+        assert!(beta > 0. && beta < 1.);
+
+        // Given beta compute the cwnd we should set at
+        let target = beta * cwnd_old as f64 + (1. - beta) * tau;
+
+        // Ensure we don't more than double once per rtt
+        self.cwnd = if target > 2. * cwnd_old as f64 {
+            2. * cwnd_old as f64
+        } else {
+            target
+        };
+
+        // println!(
+        //     "tau: {} cwnd_old: {} beta: {} target: {} cwnd: {}",
+        //     tau, cwnd_old, beta, target, self.cwnd
+        // );
+    }
+
+    fn on_send(&mut self, _now: Time, seq_num: SeqNum) {
+        // Record cwnd_hist
+        let cwnd = self.get_cwnd();
+        self.cwnd_hist.push_back((seq_num, cwnd));
+    }
+
+    fn on_timeout(&mut self) {}
+
+    fn get_cwnd(&mut self) -> u64 {
+        max(1, self.cwnd as u64)
+    }
+
+    fn get_intersend_time(&mut self) -> Time {
+        Time::ZERO
     }
 }

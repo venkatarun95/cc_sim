@@ -41,6 +41,9 @@ pub fn create_topology<'a>(config: &'a Config, tracer: &'a Tracer) -> Result<Sch
                 CCConfig::AIMD => Box::new(cc::AIMD::default()),
                 CCConfig::InstantCC => Box::new(cc::InstantCC::default()),
                 CCConfig::OscInstantCC { k, omega } => Box::new(cc::OscInstantCC::new(k, omega)),
+                CCConfig::StableLinearCC { alpha, k } => {
+                    Box::new(cc::StableLinearCC::new(alpha, k, group_config.delay))
+                }
             };
 
             // Decide everybody's ids

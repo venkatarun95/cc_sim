@@ -31,7 +31,8 @@ pub enum LinkTraceConfig {
 pub enum CCConfig {
     AIMD,
     InstantCC,
-    OscInstantCC {k: f64, omega: f64},
+    OscInstantCC { k: f64, omega: f64 },
+    StableLinearCC { alpha: f64, k: f64 },
 }
 
 /// A group of senders
