@@ -188,12 +188,12 @@ impl<'a> Tracer<'a> {
 
             let ax = fig
                 .axes2d()
-                .set_x_label("Time (ms)", &[])
+                .set_x_label("Time (secs)", &[])
                 .set_y_label("Cwnd (pkts)", &[]);
             // Add lines for each sender
             for (id, data) in self.cwnds.borrow().iter() {
                 let (times, cwnds): (Vec<f64>, Vec<u64>) =
-                    data.iter().map(|(t, c)| (t.millis(), *c)).unzip();
+                    data.iter().map(|(t, c)| (t.secs(), *c)).unzip();
                 ax.lines(times, cwnds, &[gnuplot::Caption(&format!("Obj{}", id))]);
             }
 
@@ -210,7 +210,7 @@ impl<'a> Tracer<'a> {
 
             let ax = fig
                 .axes2d()
-                .set_x_label("Time (ms)", &[])
+                .set_x_label("Time (secs)", &[])
                 .set_y_label("RTT (ms)", &[]);
             // Add lines for each sender
             for (id, data) in self.rtts.borrow().iter() {
@@ -218,8 +218,8 @@ impl<'a> Tracer<'a> {
                     .iter()
                     .map(|(t, r)| {
                         (
-                            t.millis(),
-                            std::cmp::min(r, &Time::from_millis(4000)).millis(),
+                            t.secs(),
+                            std::cmp::min(r, &Time::from_millis(2000)).millis(),
                         )
                     })
                     .unzip();
@@ -241,11 +241,11 @@ impl<'a> Tracer<'a> {
 
                 let ax = fig
                     .axes2d()
-                    .set_x_label("Time (ms)", &[])
+                    .set_x_label("Time (secs)", &[])
                     .set_y_label("Rate (Mbit/s)", &[]);
 
                 // All lines share the same set of times
-                let times: Vec<f64> = buckets.iter().map(|x| x.start_time.millis()).collect();
+                let times: Vec<f64> = buckets.iter().map(|x| x.start_time.secs()).collect();
                 // Link capacity lines
                 let capacity: Vec<f64> = buckets
                     .iter()

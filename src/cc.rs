@@ -376,7 +376,8 @@ impl CongestionControl for StableLinearCC {
         let beta = 1.
             - self.k * self.alpha.sqrt()
                 / (mu_old.sqrt() * self.rtt_min.secs() + self.alpha.sqrt());
-        assert!(beta > 0. && beta < 1.);
+        let beta = if beta <= 0. { 0. } else { beta };
+        assert!(beta >= 0. && beta < 1.);
 
         // Given beta compute the cwnd we should set at
         let target = beta * cwnd_old as f64 + (1. - beta) * tau;
