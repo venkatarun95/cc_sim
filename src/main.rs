@@ -31,10 +31,7 @@ fn main() -> Result<(), Error> {
         sender_groups.push(SenderGroupConfig {
             num_senders: 1,
             delay: Time::from_millis(50),
-            cc: CCConfig::OscInstantCC {
-                k: 2.,
-                omega: 6.28 * 1.,
-            },
+            cc: CCConfig::Instant,
             start_time: Time::from_secs(i * 2),
             tx_length: TcpSenderTxLength::Infinite,
         });

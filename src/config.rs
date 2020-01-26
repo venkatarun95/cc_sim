@@ -30,8 +30,7 @@ pub enum LinkTraceConfig {
 #[allow(dead_code)]
 pub enum CCConfig {
     AIMD,
-    InstantCC,
-    OscInstantCC {k: f64, omega: f64},
+    Instant,
 }
 
 /// A group of senders

@@ -39,8 +39,7 @@ pub fn create_topology<'a>(config: &'a Config, tracer: &'a Tracer) -> Result<Sch
             // Create congestion control
             let ccalg: Box<dyn CongestionControl> = match group_config.cc {
                 CCConfig::AIMD => Box::new(cc::AIMD::default()),
-                CCConfig::InstantCC => Box::new(cc::InstantCC::default()),
-                CCConfig::OscInstantCC { k, omega } => Box::new(cc::OscInstantCC::new(k, omega)),
+                CCConfig::Instant => Box::new(cc::Instant::default()),
             };
 
             // Decide everybody's ids
