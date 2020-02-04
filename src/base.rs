@@ -1,6 +1,10 @@
 use crate::config::{Config, LinkTraceConfig};
 use crate::simulator::*;
 use crate::tracer::{TraceElem, Tracer};
+use crate::random::RandomVariable;
+
+use rand_distr::Poisson;
+use rand::rngs::StdRng;
 
 use failure::{format_err, Error};
 use fnv::FnvHashMap;
@@ -83,6 +87,9 @@ pub enum LinkTrace<'c> {
     /// A constant link rate in bytes per second
     #[allow(dead_code)]
     Const { rate: f64, config: &'c Config },
+    /// Link rate (in bytes per second) sampled from the given distribution.
+    #[allow(dead_code)]
+    Random { rate: RandomVariable<Poisson<f64>, StdRng>, config: &'c Config},
     /// A piecewise-constant link rate. Give the rate and duration for which it applies in bytes
     /// per second. Loops after it reaches the end.
     #[allow(dead_code)]
@@ -100,9 +107,16 @@ pub enum LinkTrace<'c> {
 }
 
 impl<'c> LinkTrace<'c> {
+    // New link with constant rate.
     #[allow(dead_code)]
     pub fn new_const(rate: f64, config: &'c Config) -> Self {
         Self::Const { rate, config }
+    }
+
+    // New link with link rate following a random distirbution.
+    #[allow(dead_code)]
+    pub fn new_random(rate: RandomVariable<Poisson<f64>, StdRng>, config: &'c Config) -> Self {
+        Self::Random { rate, config }
     }
 
     /// A piecewise constant link rate trace. Give a list of rates along with how long they should
@@ -147,6 +161,7 @@ impl<'c> LinkTrace<'c> {
     pub fn from_config(link_config: &LinkTraceConfig, config: &'c Config) -> Result<Self, Error> {
         Ok(match link_config {
             LinkTraceConfig::Const(rate) => Self::new_const(*rate, config),
+            LinkTraceConfig::Random(rate) => Self::new_random(rate.clone(), config),
             LinkTraceConfig::Piecewise(rates) => Self::new_piecewise(rates, config),
             LinkTraceConfig::MahimahiFile(fname) => Self::new_mahimahi_from_file(Path::new(fname))?,
         })
@@ -158,6 +173,9 @@ impl<'c> LinkTrace<'c> {
         match self {
             Self::Const { rate, config } => Time::from_micros(
                 (now.micros() as f64 + (1_000_000. * config.pkt_size as f64 / *rate)) as u64,
+            ),
+            Self::Random { rate, config } => Time::from_micros(
+                (now.micros() as f64 + (1_000_000. * config.pkt_size as f64 / (rate.sample()))) as u64,
             ),
             Self::Piecewise {
                 rates,

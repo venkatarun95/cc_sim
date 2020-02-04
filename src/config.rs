@@ -1,7 +1,10 @@
 //! Global configuration
-
 use crate::simulator::Time;
 use crate::transport::TcpSenderTxLength;
+use crate::random::RandomVariable;
+
+use rand_distr::Poisson;
+use rand::rngs::StdRng;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -18,10 +21,12 @@ pub struct Config {
 pub enum LinkTraceConfig {
     /// Constant link rate in bytes per second
     Const(f64),
+    /// Random link with link rate as samples from the given stationary distribution.
+    Random(RandomVariable<Poisson<f64>, StdRng>),
     /// A piecewise-constant link rate. Give the rate and duration for which it applies in bytes
     /// per second. Loops after it reaches the end.
     Piecewise(Vec<(f64, Time)>),
-    /// File containint a mahimahi-like trace (it also handles floating-point values)
+    /// File containing a mahimahi-like trace (it also handles floating-point values)
     MahimahiFile(String),
 }
 
