@@ -36,11 +36,11 @@ fn main() -> Result<(), Error> {
 
     // Configure senders
     let mut sender_groups = Vec::new();
-    for i in 0..2 {
+    for i in 0..1 {
         sender_groups.push(SenderGroupConfig {
             num_senders: 1,
             delay: Time::from_millis(50),
-            cc: CCConfig::Instant,
+            cc: CCConfig::BBR,
             start_time: Time::from_secs(i * 2),
             tx_length: TcpSenderTxLength::Infinite,
         });
@@ -57,7 +57,7 @@ fn main() -> Result<(), Error> {
         },
         log: ConfigLog {
             out_terminal: "png".to_string(),
-            out_file: "out.png".to_string(),
+            out_file: "bbr.png".to_string(),
             cwnd: LogType::Plot,
             rtt: LogType::Plot,
             sender_losses: LogType::Ignore,

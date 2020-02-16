@@ -1,8 +1,9 @@
 use crate::simulator::{SeqNum, Time};
 use crate::transport::CongestionControl;
 
-use std::cmp::min;
+include!(concat!(env!("OUT_DIR"), "/bbr.rs"));
 
+use std::cmp::min;
 #[allow(dead_code)]
 pub struct AIMD {
     cwnd: f64,
@@ -169,5 +170,52 @@ impl CongestionControl for Instant {
 
     fn get_intersend_time(&mut self) -> Time {
         Time::from_micros(0)
+    }
+}
+
+// BBR
+pub struct BBR_Wrapper{
+    bbr_ptr: *mut BBR,
+}
+
+impl Default for BBR_Wrapper {
+    fn default() -> Self {
+        unsafe {
+            BBR_Wrapper{
+                bbr_ptr: create_bbr(),
+            }
+        }
+    }
+}
+
+impl CongestionControl for BBR_Wrapper {
+    fn on_ack(&mut self, _now: Time, _ack_seq: SeqNum, _rtt: Time, num_lost: u64) {
+        unsafe {
+            on_ack(self.bbr_ptr, _now.micros(), _ack_seq, _rtt.micros(), num_lost);
+        }
+    }
+
+    fn on_send(&mut self, _now: Time, _seq_num: SeqNum) {
+        unsafe {
+            on_send(self.bbr_ptr, _now.micros(), _seq_num);
+        }
+    }
+
+    fn on_timeout(&mut self) {
+        unsafe {
+            on_timeout(self.bbr_ptr);
+        }
+    }
+
+    fn get_cwnd(&mut self) -> u64 {
+        unsafe {
+            get_cwnd(self.bbr_ptr) * 1500
+        }
+    }
+
+    fn get_intersend_time(&mut self) -> Time {
+        unsafe {
+            Time::from_micros(get_intersend_time(self.bbr_ptr))
+        }
     }
 }

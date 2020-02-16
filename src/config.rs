@@ -36,6 +36,7 @@ pub enum LinkTraceConfig {
 pub enum CCConfig {
     AIMD,
     Instant,
+    BBR,
 }
 
 /// A group of senders
