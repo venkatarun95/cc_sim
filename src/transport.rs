@@ -123,7 +123,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
     fn has_ended(&self, now: Time) -> bool {
         match self.tx_length {
             TcpSenderTxLength::Duration(time) => self.start_time + time < now,
-            TcpSenderTxLength::Bytes(bytes) => self.last_sent * self.config.pkt_size >= bytes,
+            TcpSenderTxLength::Bytes(bytes) => self.last_acked * self.config.pkt_size >= bytes,
             TcpSenderTxLength::Infinite => false,
         }
     }
