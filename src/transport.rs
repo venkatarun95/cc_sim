@@ -128,6 +128,15 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
         }
     }
 
+    /// Whether we have sent all bytes.
+    fn sent_all(&self, now: Time) -> bool {
+        match self.tx_length {
+            TcpSenderTxLength::Duration(time) => self.start_time + time < now,
+            TcpSenderTxLength::Bytes(bytes) => self.last_sent * self.config.pkt_size >= bytes,
+            TcpSenderTxLength::Infinite => false,
+        }
+    }
+
     /// Transmit a packet now by returning an event that pushes a packet
     fn tx_packet(&mut self, obj_id: NetObjId, now: Time) -> Vec<(Time, NetObjId, Action)> {
         self.last_sent += 1;
@@ -152,7 +161,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
     /// Schedule a transmission if appropriate
     fn schedule_tx(&mut self, obj_id: NetObjId, now: Time) -> Vec<(Time, NetObjId, Action)> {
         // See if we should transmit packets
-        if !self.tx_scheduled {
+        if !self.tx_scheduled{
             let cwnd = self.cc.get_cwnd();
             if cwnd > self.last_sent - self.last_acked {
                 // See if we should transmit now, or schedule an event later
@@ -200,7 +209,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             assert!(self.last_sent >= self.last_acked);
             assert!(ack_seq > self.last_acked);
             assert!(ack_seq <= self.last_sent);
-            if self.has_ended(now) {
+            if self.has_ended(now) || self.sent_all(now) {
                 return Ok(Vec::new());
             }
 
@@ -241,7 +250,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
         uid: u64,
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         assert_eq!(obj_id, from);
-        if self.has_ended(now) {
+        if self.has_ended(now) || self.sent_all(now) {
             return Ok(Vec::new());
         }
 
