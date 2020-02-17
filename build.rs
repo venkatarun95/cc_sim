@@ -6,6 +6,14 @@ use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rerun-if-changed=src/bbr/simul.c");
+    println!("cargo:rerun-if-changed=src/bbr/simul.h");
+    println!("cargo:rerun-if-changed=src/bbr/map.c");
+    println!("cargo:rerun-if-changed=src/bbr/map.h");
+    println!("cargo:rerun-if-changed=src/bbr/linux_bbr/ns-linux-util.h");
+    println!("cargo:rerun-if-changed=src/bbr/linux_bbr/ns-linux-util.c");
+    println!("cargo:rerun-if-changed=src/bbr/linux_bbr/ns-linux-param.c");
+    println!("cargo:rerun-if-changed=src/bbr/linux_bbr/ns-linux-param.h");
+    println!("cargo:rerun-if-changed=src/bbr/linux_bbr/src/tcp_bbr.c");
 
     cc::Build::new()
 		.file("src/bbr/simul.c")
