@@ -4,9 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// Constants.
-const u64 PACKET_SIZE = 1500;
-
 /* Functions modified from the Linux kernel. */
 void tcp_rate_skb_sent(BBR* bbr, u64 now_ns, u64 seqnum)
 {
@@ -31,8 +28,11 @@ void tcp_rate_skb_sent(BBR* bbr, u64 now_ns, u64 seqnum)
 		u64 tstamp_us = tcp_skb_timestamp_us(skb);
 		bbr -> sk.first_tx_mstamp  = tstamp_us;
 		bbr -> sk.delivered_mstamp = tstamp_us;
+		printf("tstamp_us = %lld\n", tstamp_us);
 	}
 
+	printf("bbr -> sk.delivered = %lld\n", bbr -> sk.delivered);
+	printf("bbr -> sk.delivered_mstamp = %lld\n", bbr -> sk.delivered_mstamp);
 	TCP_SKB_CB(skb)->tx.first_tx_mstamp	 = bbr -> sk.first_tx_mstamp;
 	TCP_SKB_CB(skb)->tx.delivered_mstamp = bbr -> sk.delivered_mstamp;
 	TCP_SKB_CB(skb)->tx.delivered		 = bbr -> sk.delivered;
@@ -46,13 +46,12 @@ void tcp_rate_skb_sent(BBR* bbr, u64 now_ns, u64 seqnum)
  * called multiple times. We favor the information from the most recently
  * sent skb, i.e., the skb with the highest prior_delivered count.
  */
-void tcp_rate_skb_delivered(BBR* bbr, u64 now, u64 seqnum)
+void tcp_rate_skb_delivered(BBR* bbr, u64 now_ns, u64 seqnum)
 {
     struct sk_buff *skb = seqnum_to_skb(&(bbr -> seqnum_map), seqnum); 
 	struct tcp_skb_cb *scb = TCP_SKB_CB(skb);
 
 	if (!scb->tx.delivered_mstamp){
-		// printf("BRO! NOT FILLED!");
         return;
     }
 
@@ -68,6 +67,7 @@ void tcp_rate_skb_delivered(BBR* bbr, u64 now, u64 seqnum)
 		/* Find the duration of the "send phase" of this window: */
 		bbr -> rs.interval_us = tcp_stamp_us_delta(bbr -> sk.first_tx_mstamp, scb->tx.first_tx_mstamp);
 	}
+
 	/* Mark off the skb delivered once it's sacked to avoid being
 	 * used again when it's cumulatively acked. For acked packets
 	 * we don't need to reset since it'll be freed soon.
@@ -102,6 +102,7 @@ void tcp_rate_gen(BBR* bbr, u64 newly_delivered, u64 rtt, u64 num_lost){
 	 * were SACKed before the reneg.
 	 */
 	if (!bbr -> rs.prior_mstamp) {
+		printf("HERE!\n");
 		bbr -> rs.delivered = -1;
 		bbr -> rs.interval_us = -1;
 		bbr -> rs.rtt_us = -1;
@@ -184,6 +185,9 @@ BBR* create_bbr(){
     set_state(bbr, TCP_CA_Open);
     cwnd_event(bbr, CA_EVENT_TX_START);
 
+	printf("Initializing....\n");
+	bbr_print(&(bbr -> sk));	
+
 	return bbr;
 }
 
@@ -203,17 +207,20 @@ struct rate_sample create_empty_rate_sample(){
 void on_ack(BBR* bbr, u64 now, u64 seqnum, u64 rtt, u64 num_lost){
     cwnd_event(bbr, CA_EVENT_FAST_ACK);
 
-	u64 newly_delivered = seqnum / PACKET_SIZE - bbr -> sk.delivered;
+	u64 newly_delivered = seqnum - bbr -> sk.delivered;
+    bbr -> sk.delivered = seqnum;
 
 	u64 now_ns = now * NSEC_PER_USEC;
     bbr -> sk.tcp_mstamp = now_ns;
     bbr -> sk.delivered_mstamp = now_ns;
-    bbr -> sk.delivered = seqnum / PACKET_SIZE;
 	
+	bbr -> rs = create_empty_rate_sample();
 	tcp_rate_skb_delivered(bbr, now_ns, seqnum);
 	tcp_rate_gen(bbr, newly_delivered, rtt, num_lost);
     
 	bbr_main(&(bbr -> sk), &(bbr -> rs));
+
+	delete(&(bbr -> seqnum_map), seqnum);
 }
 
 
@@ -223,11 +230,11 @@ void on_send(BBR* bbr, u64 now, u64 seqnum){
     bbr -> sk.intersend_time = min(bbr -> sk.intersend_time, now - bbr -> sk.send_timestamp_us);
     bbr -> sk.send_timestamp_us = now;
 
-	bbr -> rs = create_empty_rate_sample();
-	tcp_rate_skb_sent(bbr, now, seqnum);
+	u64 now_ns = now * NSEC_PER_USEC;
+	tcp_rate_skb_sent(bbr, now_ns, seqnum);
     
-    bbr -> sk.tcp_mstamp = now;
-	bbr -> sk.packets_out = seqnum / PACKET_SIZE;
+	bbr -> sk.tcp_mstamp = now_ns;
+	bbr -> sk.packets_out = seqnum;
 }
 
 /// Called if the sender timed out
@@ -252,7 +259,7 @@ void loop(BBR* bbr){
 	u64 rtt = ~0U;
 
     for(u64 now = 1000; now < 10000; now += 100){
-		seqnum += PACKET_SIZE;
+		seqnum += 1;
 		rtt = 40 + rand() % 20;
 
 		printf("Time = %lld ms:\n", now);
