@@ -161,7 +161,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
     /// Schedule a transmission if appropriate
     fn schedule_tx(&mut self, obj_id: NetObjId, now: Time) -> Vec<(Time, NetObjId, Action)> {
         // See if we should transmit packets
-        if !self.tx_scheduled{
+        if !self.tx_scheduled && !self.sent_all(now) {
             let cwnd = self.cc.get_cwnd();
             if cwnd > self.last_sent - self.last_acked {
                 // See if we should transmit now, or schedule an event later
@@ -209,7 +209,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             assert!(self.last_sent >= self.last_acked);
             assert!(ack_seq > self.last_acked);
             assert!(ack_seq <= self.last_sent);
-            if self.has_ended(now) || self.sent_all(now) {
+            if self.has_ended(now) {
                 return Ok(Vec::new());
             }
 
@@ -221,7 +221,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             // Update srtt and rttvars
             self.rttvar = Time::from_micros(
                 ((1. - 1. / 4.) * self.rttvar.micros() as f64
-                    + 1. / 4. * (self.srtt.micros() as f64 - rtt.micros() as f64).abs())
+                     + 1. / 4. * (self.srtt.micros() as f64 - rtt.micros() as f64).abs())
                     as u64,
             );
             self.srtt = Time::from_micros(
@@ -250,7 +250,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
         uid: u64,
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         assert_eq!(obj_id, from);
-        if self.has_ended(now) || self.sent_all(now) {
+        if self.has_ended(now) {
             return Ok(Vec::new());
         }
 
