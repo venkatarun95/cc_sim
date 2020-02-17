@@ -16,7 +16,9 @@ impl Default for AIMD {
 }
 
 impl CongestionControl for AIMD {
-    fn on_ack(&mut self, _now: Time, _ack_seq: SeqNum, _rtt: Time, num_lost: u64) {
+    fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, _rtt: Time, num_lost: u64) {
+        println!("Received ACK for {}", ack_seq);
+
         if num_lost == 0 {
             self.cwnd += 1. / self.cwnd;
         } else {
@@ -27,7 +29,9 @@ impl CongestionControl for AIMD {
         }
     }
 
-    fn on_send(&mut self, _now: Time, _seq_num: SeqNum) {}
+    fn on_send(&mut self, _now: Time, seq_num: SeqNum) {
+        println!("Sent {}", seq_num);
+    }
 
     fn on_timeout(&mut self) {
         self.cwnd = 1.;
@@ -76,6 +80,8 @@ impl Default for Instant {
 // ATT account number 4361 5082 2804
 impl CongestionControl for Instant {
     fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, rtt: Time, num_lost: u64) {
+        println!("Received ACK for {}", ack_seq);
+
         // What is the maximum multiplicative increase in cwnd per RTT
         let max_incr = 2.;
         if rtt < self.rtt_min {
@@ -148,6 +154,8 @@ impl CongestionControl for Instant {
     }
 
     fn on_send(&mut self, now: Time, seq_num: SeqNum) {
+        println!("Sent {}", seq_num);
+
         assert!(seq_num > self.last_sent_seq);
         self.last_sent_seq = seq_num;
         if self.waiting_seq.is_none() {
@@ -176,6 +184,7 @@ impl CongestionControl for Instant {
 // BBR
 pub struct BBR_Wrapper{
     bbr_ptr: *mut BBR,
+    init_time_us: u64,
 }
 
 impl Default for BBR_Wrapper {
@@ -183,21 +192,26 @@ impl Default for BBR_Wrapper {
         unsafe {
             BBR_Wrapper{
                 bbr_ptr: create_bbr(),
+                init_time_us: 1000,
             }
         }
     }
 }
 
 impl CongestionControl for BBR_Wrapper {
-    fn on_ack(&mut self, _now: Time, _ack_seq: SeqNum, _rtt: Time, num_lost: u64) {
+    fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, _rtt: Time, num_lost: u64) {
+        println!("Received ACK for {}", ack_seq);
         unsafe {
-            on_ack(self.bbr_ptr, _now.micros(), _ack_seq, _rtt.micros(), num_lost);
+            bbr_print_wrapper(self.bbr_ptr);
+            on_ack(self.bbr_ptr, self.init_time_us + _now.micros(), ack_seq, _rtt.micros(), num_lost);
         }
     }
 
-    fn on_send(&mut self, _now: Time, _seq_num: SeqNum) {
+    fn on_send(&mut self, _now: Time, seq_num: SeqNum) {
+        println!("Sent {}", seq_num);
         unsafe {
-            on_send(self.bbr_ptr, _now.micros(), _seq_num);
+            // bbr_print_wrapper(self.bbr_ptr);
+            on_send(self.bbr_ptr, self.init_time_us + _now.micros(), seq_num);
         }
     }
 
@@ -209,7 +223,7 @@ impl CongestionControl for BBR_Wrapper {
 
     fn get_cwnd(&mut self) -> u64 {
         unsafe {
-            get_cwnd(self.bbr_ptr) * 1500
+            get_cwnd(self.bbr_ptr)
         }
     }
 
