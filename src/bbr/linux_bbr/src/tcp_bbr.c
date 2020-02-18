@@ -240,11 +240,10 @@ static u16 bbr_extra_acked(const struct sock *sk)
 static u64 bbr_rate_bytes_per_sec(struct sock *sk, u64 rate, int gain)
 {
 	unsigned int mss = tcp_sk(sk)->mss_cache;
-
 	rate *= mss;
 	rate *= gain;
 	rate >>= BBR_SCALE;
-	rate *= USEC_PER_SEC / 100 * (100 - bbr_pacing_margin_percent);
+	rate *= (USEC_PER_SEC / 100) * (100 - bbr_pacing_margin_percent);
 	return rate >> BW_SCALE;
 }
 
@@ -766,9 +765,6 @@ static void bbr_update_bw(struct sock *sk, const struct rate_sample *rs)
 	struct bbr *bbr = inet_csk_ca(sk);
 	u64 bw;
 
-	// printf("BROOOOOOOO\n");
-	// printf("%ld, %ld", rs->delivered, rs->interval_us);
-
 	bbr->round_start = 0;
 	if (rs->delivered < 0 || rs->interval_us <= 0)
 		return; /* Not a valid observation */
@@ -904,10 +900,6 @@ static void bbr_check_drain(struct sock *sk, const struct rate_sample *rs)
 {
 	struct bbr *bbr = inet_csk_ca(sk);
 
-	// bbr -> round_start = 1;
-	// printf("Checking if we can move to DRAIN.\n");
-	// printf("bbr_full_bw_reached(sk) || !bbr->round_start || rs->is_app_limited = %d || %d || %d\n", bbr_full_bw_reached(sk), !bbr->round_start, rs->is_app_limited);
-
 	if (bbr->mode == BBR_STARTUP && bbr_full_bw_reached(sk)) {
 		bbr->mode = BBR_DRAIN;	/* drain queue we created */
 		tcp_sk(sk)->snd_ssthresh =
@@ -963,7 +955,7 @@ static void bbr_update_min_rtt(struct sock *sk, const struct rate_sample *rs)
 	filter_expired = after(tcp_jiffies32(sk),
 			       bbr->min_rtt_stamp + bbr_min_rtt_win_sec * HZ);
 	if (rs->rtt_us >= 0 &&
-	    (rs->rtt_us <= bbr->min_rtt_us ||
+	    (rs->rtt_us <= (long) bbr->min_rtt_us ||
 	     (filter_expired && !rs->is_ack_delayed))) {
 		bbr->min_rtt_us = rs->rtt_us;
 		bbr->min_rtt_stamp = tcp_jiffies32(sk);
@@ -1160,9 +1152,10 @@ static void bbr_set_state(struct sock *sk, u8 new_state)
 void bbr_print(struct sock *sk){
 	struct bbr *bbr = inet_csk_ca(sk);
 	printf("BBR Mode: %d.\n", bbr -> mode);
-	printf("Bottleneck Bandwidth: %lld Bps.\n", bbr_rate_bytes_per_sec(sk, bbr_bw(sk), bbr->pacing_gain) / bbr->pacing_gain);
-	printf("Minimum RTT: %ld us.\n", bbr -> min_rtt_us);
+	printf("Bottleneck Bandwidth: %lld Bps.\n", bbr_rate_bytes_per_sec(sk, bbr_bw(sk) << BBR_SCALE, 1));
+	printf("Pacing Gain: %f.\n", ((double)bbr->pacing_gain)/BBR_UNIT);
 	printf("Pacing Rate: %ld Bps.\n", tcp_sk(sk)->sk_pacing_rate);
+	printf("Minimum RTT: %ld us.\n", bbr -> min_rtt_us);
 	printf("Congestion Window: %ld packets.\n", tcp_sk(sk)->snd_cwnd);
 	printf("\n");
 }

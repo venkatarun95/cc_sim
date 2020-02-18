@@ -861,6 +861,9 @@ enum tcp_ca_state
 /* The initial MTU to use for probing */
 #define TCP_BASE_MSS		1024
 
+/* The default MTU to use. */
+#define TCP_DEFAULT_MSS		1500
+
 /* probing interval, default to 10 minutes as per RFC4821 */
 #define TCP_PROBE_INTERVAL	600
 
