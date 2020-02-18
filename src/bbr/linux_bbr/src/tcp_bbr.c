@@ -1161,7 +1161,7 @@ void bbr_print(struct sock *sk){
 	struct bbr *bbr = inet_csk_ca(sk);
 	printf("BBR Mode: %d.\n", bbr -> mode);
 	printf("Bottleneck Bandwidth: %lld Bps.\n", bbr_rate_bytes_per_sec(sk, bbr_bw(sk), bbr->pacing_gain) / bbr->pacing_gain);
-	printf("Minimum RTT: %ld ms.\n", bbr -> min_rtt_us / USEC_PER_MSEC);
+	printf("Minimum RTT: %ld us.\n", bbr -> min_rtt_us);
 	printf("Pacing Rate: %ld Bps.\n", tcp_sk(sk)->sk_pacing_rate);
 	printf("Congestion Window: %ld packets.\n", tcp_sk(sk)->snd_cwnd);
 	printf("\n");
