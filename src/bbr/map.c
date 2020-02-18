@@ -14,6 +14,7 @@ sk_buff* insert(map* m, u64 seqnum){
     entry -> next = m -> start;
     entry -> seqnum = seqnum;
     m -> start = entry;
+    m -> size += 1;
     return &(entry -> skb);
 }
 
@@ -26,16 +27,22 @@ void delete(map* m, u64 seqnum){
         if(curr -> seqnum == seqnum){
             break;
         }
-        curr = curr -> next;
+
         prev = curr;
+        curr = curr -> next;
     }
 
     if(curr == NULL){
         return;
     }
 
+    // Adjust size.
+    m -> size -= 1;
+
     // Adjust pointers.
-    prev -> next = curr -> next;
+    if(prev != NULL){
+        prev -> next = curr -> next;
+    }
     
     // Free memory.
     free(curr);
