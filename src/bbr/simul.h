@@ -8,7 +8,7 @@ struct BBR {
 typedef struct BBR BBR;
 
 void tcp_rate_skb_sent(BBR* bbr, u64 now, u64 seqnum);
-void tcp_rate_gen(BBR* bbr, u64 newly_delivered, u64 rtt, u64 num_lost);
+void tcp_rate_gen(BBR* bbr, u64 newly_delivered, u64 in_flight, u64 rtt, u64 num_lost);
 void set_state(BBR* bbr, u8 new_state);
 void cwnd_event(BBR* bbr, enum tcp_ca_event ev);
 void bbr_print_wrapper(BBR* bbr);

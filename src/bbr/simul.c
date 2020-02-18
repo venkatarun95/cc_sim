@@ -28,11 +28,8 @@ void tcp_rate_skb_sent(BBR* bbr, u64 now_ns, u64 seqnum)
 		u64 tstamp_us = tcp_skb_timestamp_us(skb);
 		bbr -> sk.first_tx_mstamp  = tstamp_us;
 		bbr -> sk.delivered_mstamp = tstamp_us;
-		printf("tstamp_us = %lld\n", tstamp_us);
 	}
 
-	printf("bbr -> sk.delivered = %lld\n", bbr -> sk.delivered);
-	printf("bbr -> sk.delivered_mstamp = %lld\n", bbr -> sk.delivered_mstamp);
 	TCP_SKB_CB(skb)->tx.first_tx_mstamp	 = bbr -> sk.first_tx_mstamp;
 	TCP_SKB_CB(skb)->tx.delivered_mstamp = bbr -> sk.delivered_mstamp;
 	TCP_SKB_CB(skb)->tx.delivered		 = bbr -> sk.delivered;
@@ -79,7 +76,7 @@ void tcp_rate_skb_delivered(BBR* bbr, u64 now_ns, u64 seqnum)
 }
 
 /* Update the connection delivery information and generate a rate sample. */
-void tcp_rate_gen(BBR* bbr, u64 newly_delivered, u64 rtt, u64 num_lost){
+void tcp_rate_gen(BBR* bbr, u64 newly_delivered, u64 in_flight, u64 rtt, u64 num_lost){
     
     /* Clear app limited if bubble is acked and gone. */
 	if (bbr -> sk.app_limited && after(bbr -> sk.delivered, bbr -> sk.app_limited)){
@@ -94,7 +91,7 @@ void tcp_rate_gen(BBR* bbr, u64 newly_delivered, u64 rtt, u64 num_lost){
 		bbr -> sk.delivered_mstamp = bbr -> sk.tcp_mstamp;
     }
 
-	bbr -> rs.acked_sacked = newly_delivered;	/* freshly ACKed or SACKed */
+	bbr -> rs.acked_sacked = 1;					/* freshly ACKed or SACKed */
 	bbr -> rs.losses = num_lost;				/* freshly marked lost */
 	/* Return an invalid sample if no timing information is available or
 	 * in recovery from loss with SACK reneging. Rate samples taken during
@@ -102,7 +99,6 @@ void tcp_rate_gen(BBR* bbr, u64 newly_delivered, u64 rtt, u64 num_lost){
 	 * were SACKed before the reneg.
 	 */
 	if (!bbr -> rs.prior_mstamp) {
-		printf("HERE!\n");
 		bbr -> rs.delivered = -1;
 		bbr -> rs.interval_us = -1;
 		bbr -> rs.rtt_us = -1;
@@ -125,6 +121,7 @@ void tcp_rate_gen(BBR* bbr, u64 newly_delivered, u64 rtt, u64 num_lost){
 	bbr -> rs.rcv_interval_us = ack_us;
 
     bbr -> rs.rtt_us = rtt;
+    bbr -> rs.prior_in_flight = in_flight;
 
 	/* Normally we expect interval_us >= min-rtt.
 	 * Note that rate may still be over-estimated when a spuriously
@@ -173,14 +170,14 @@ BBR* create_bbr(){
 
 	bbr -> sk.srtt_us = 0;
     bbr -> sk.snd_cwnd = TCP_INIT_CWND;
-    bbr -> sk.mss_cache = TCP_BASE_MSS;
+    bbr -> sk.mss_cache = TCP_DEFAULT_MSS;
     bbr -> sk.snd_cwnd_clamp = ~0U;
     bbr -> sk.sk_pacing_rate = 0U;
     bbr -> sk.sk_max_pacing_rate = ~0U;
 	bbr -> sk.delivered = 0;
 	bbr -> sk.delivered_mstamp = 0;
 	
-	minmax_reset(&bbr -> sk.rtt_min, tcp_jiffies32(&bbr -> sk), ~0U);
+	minmax_reset(&(bbr -> sk.rtt_min), tcp_jiffies32(&(bbr -> sk)), ~0U);
     
     bbr_init(&(bbr -> sk));
 	
@@ -209,32 +206,18 @@ struct rate_sample create_empty_rate_sample(){
 void on_ack(BBR* bbr, u64 now, u64 seqnum, u64 rtt, u64 num_lost){
     cwnd_event(bbr, CA_EVENT_FAST_ACK);
 
-	u64 newly_delivered = seqnum - bbr -> sk.delivered;
-    bbr -> sk.delivered = seqnum;
+	u64 newly_delivered = 1;
+	u64 in_flight = seqnum - bbr -> sk.packets_out;
 
-	u64 now_ns = now * NSEC_PER_USEC;
+    bbr -> sk.delivered = seqnum;
 	bbr -> sk.tcp_mstamp = now;
 	bbr -> sk.delivered_mstamp = now;
 
 	bbr -> rs = create_empty_rate_sample();
-	tcp_rate_skb_delivered(bbr, now_ns, seqnum);
-	tcp_rate_gen(bbr, newly_delivered, rtt, num_lost);
 
-	printf("Rate sample stats:\n");
-	printf("prior_mstamp = %lu\n", bbr -> rs.prior_mstamp);
-	printf("prior_delivered = %lu\n", bbr -> rs.prior_delivered);
-	printf("delivered = %lu\n", bbr -> rs.delivered);
-	printf("interval_us = %lu\n", bbr -> rs.interval_us);
-	printf("snd_interval_us = %lu\n", bbr -> rs.snd_interval_us);
-	printf("rcv_interval_us = %lu\n", bbr -> rs.rcv_interval_us);
-	printf("rtt_us = %lu\n", bbr -> rs.rtt_us);
-	printf("losses = %lu\n", bbr -> rs.losses);
-	printf("acked_sacked = %lu\n", bbr -> rs.acked_sacked);
-	printf("prior_in_flight = %lu\n", bbr -> rs.prior_in_flight);
-	printf("is_app_limited = %lu\n", bbr -> rs.is_app_limited);
-	printf("is_retrans = %lu\n", bbr -> rs.is_retrans);
-	printf("is_ack_delayed = %lu\n", bbr -> rs.is_ack_delayed);
-	printf("\n");
+	u64 now_ns = now * NSEC_PER_USEC;
+	tcp_rate_skb_delivered(bbr, now_ns, seqnum);
+	tcp_rate_gen(bbr, newly_delivered, in_flight, rtt, num_lost);
 
 	bbr_main(&(bbr -> sk), &(bbr -> rs));
 
