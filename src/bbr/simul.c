@@ -168,6 +168,8 @@ void bbr_print_wrapper(BBR* bbr){
 BBR* create_bbr(){
 	BBR* bbr = malloc(sizeof(BBR));
 	memset(&(bbr -> sk), 0, sizeof(bbr -> sk));
+	bbr -> seqnum_map.start = NULL;
+	bbr -> seqnum_map.size = 0;
 
 	bbr -> sk.srtt_us = 0;
     bbr -> sk.snd_cwnd = TCP_INIT_CWND;
@@ -211,13 +213,29 @@ void on_ack(BBR* bbr, u64 now, u64 seqnum, u64 rtt, u64 num_lost){
     bbr -> sk.delivered = seqnum;
 
 	u64 now_ns = now * NSEC_PER_USEC;
-    bbr -> sk.tcp_mstamp = now_ns;
-    bbr -> sk.delivered_mstamp = now_ns;
-	
+	bbr -> sk.tcp_mstamp = now;
+	bbr -> sk.delivered_mstamp = now;
+
 	bbr -> rs = create_empty_rate_sample();
 	tcp_rate_skb_delivered(bbr, now_ns, seqnum);
 	tcp_rate_gen(bbr, newly_delivered, rtt, num_lost);
-    
+
+	printf("Rate sample stats:\n");
+	printf("prior_mstamp = %lu\n", bbr -> rs.prior_mstamp);
+	printf("prior_delivered = %lu\n", bbr -> rs.prior_delivered);
+	printf("delivered = %lu\n", bbr -> rs.delivered);
+	printf("interval_us = %lu\n", bbr -> rs.interval_us);
+	printf("snd_interval_us = %lu\n", bbr -> rs.snd_interval_us);
+	printf("rcv_interval_us = %lu\n", bbr -> rs.rcv_interval_us);
+	printf("rtt_us = %lu\n", bbr -> rs.rtt_us);
+	printf("losses = %lu\n", bbr -> rs.losses);
+	printf("acked_sacked = %lu\n", bbr -> rs.acked_sacked);
+	printf("prior_in_flight = %lu\n", bbr -> rs.prior_in_flight);
+	printf("is_app_limited = %lu\n", bbr -> rs.is_app_limited);
+	printf("is_retrans = %lu\n", bbr -> rs.is_retrans);
+	printf("is_ack_delayed = %lu\n", bbr -> rs.is_ack_delayed);
+	printf("\n");
+
 	bbr_main(&(bbr -> sk), &(bbr -> rs));
 
 	delete(&(bbr -> seqnum_map), seqnum);
@@ -233,7 +251,7 @@ void on_send(BBR* bbr, u64 now, u64 seqnum){
 	u64 now_ns = now * NSEC_PER_USEC;
 	tcp_rate_skb_sent(bbr, now_ns, seqnum);
     
-	bbr -> sk.tcp_mstamp = now_ns;
+	bbr -> sk.tcp_mstamp = now;
 	bbr -> sk.packets_out = seqnum;
 }
 
@@ -258,18 +276,23 @@ void loop(BBR* bbr){
 	u64 seqnum = 0;
 	u64 rtt = ~0U;
 
-    for(u64 now = 1000; now < 10000; now += 100){
-		seqnum += 1;
+    for(u64 now = 100000; now < 120000; now += 10000){
+		seqnum += 2;
 		rtt = 40 + rand() % 20;
 
-		printf("Time = %lld ms:\n", now);
+		printf("Time = %lld ms:\n", now/1000);
 		printf("Sending segment with seqnum = %lld...\n", seqnum);
         on_send(bbr, now, seqnum);
+		printf("Sending segment with seqnum = %lld...\n", seqnum + 1);
+		on_send(bbr, now, seqnum + 1);
+
 		bbr_print_wrapper(bbr);
 
-		printf("Time = %lld ms:\n", now + rtt);
+		printf("Time = %lld ms:\n", (now + rtt)/1000);
 		printf("Received ACK for segment with seqnum = %lld...\n", seqnum);
         on_ack(bbr, now + rtt, seqnum, rtt, 0);
+		printf("Received ACK for segment with seqnum = %lld...\n", seqnum + 1);
+        on_ack(bbr, now + rtt, seqnum + 1, rtt, 0);
 		bbr_print_wrapper(bbr);
 
 		printf("--------\n");
