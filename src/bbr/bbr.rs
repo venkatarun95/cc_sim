@@ -282,6 +282,7 @@ pub const TCP_MIN_GSO_SIZE: u32 = 8;
 pub const MAX_TCP_WINDOW: u32 = 32767;
 pub const TCP_MIN_MSS: u32 = 88;
 pub const TCP_BASE_MSS: u32 = 1024;
+pub const TCP_DEFAULT_MSS: u32 = 1500;
 pub const TCP_PROBE_INTERVAL: u32 = 600;
 pub const TCP_PROBE_THRESHOLD: u32 = 8;
 pub const TCP_FASTRETRANS_THRESH: u32 = 3;
@@ -5117,6 +5118,7 @@ extern "C" {
     pub fn tcp_rate_gen(
         bbr: *mut BBR,
         newly_delivered: ::std::os::raw::c_ulonglong,
+        in_flight: ::std::os::raw::c_ulonglong,
         rtt: ::std::os::raw::c_ulonglong,
         num_lost: ::std::os::raw::c_ulonglong,
     );
