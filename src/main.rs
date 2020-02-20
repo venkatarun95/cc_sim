@@ -5,6 +5,7 @@ mod simulator;
 mod topology;
 mod tracer;
 mod transport;
+mod random;
 
 use config::{
     CCConfig, Config, ConfigLog, ConfigTopo, LinkTraceConfig, LogType, SenderGroupConfig,
@@ -13,12 +14,20 @@ use simulator::*;
 use topology::create_topology;
 use tracer::Tracer;
 use transport::*;
+use random::RandomVariable;
+
+use rand_distr::Poisson;
+use rand::SeedableRng;
 
 use failure::Error;
 
 fn main() -> Result<(), Error> {
     // Three variants of links to choose from
     let _c_link_trace = LinkTraceConfig::Const(15_000_000.);
+    let _r_link_trace = LinkTraceConfig::Random(RandomVariable{
+        dist: Poisson::new(1_000_000.0).unwrap(),
+        rng: SeedableRng::from_seed([0; 32]),
+    });
     let _p_link_trace = LinkTraceConfig::Piecewise(vec![
         (1_500_000., Time::from_secs(20)),
         (15_000_000., Time::from_secs(20)),
