@@ -3,8 +3,8 @@ use crate::simulator::Time;
 use crate::transport::TcpSenderTxLength;
 use crate::random::RandomVariable;
 
-use rand_distr::Poisson;
-use rand::rngs::StdRng;
+// For random links.
+use rand_distr::*;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -14,6 +14,8 @@ pub struct Config {
     pub sim_dur: Option<Time>,
     pub log: ConfigLog,
     pub topo: ConfigTopo,
+    // Random seed for reproducibility.
+    pub random_seed: u8,
 }
 
 /// Configure a `LinkTrace` for use in `Link`
@@ -22,7 +24,7 @@ pub enum LinkTraceConfig {
     /// Constant link rate in bytes per second
     Const(f64),
     /// Random link with link rate as samples from the given stationary distribution.
-    Random(RandomVariable<Poisson<f64>, StdRng>),
+    Random(RandomVariable<Poisson<f64>>),
     /// A piecewise-constant link rate. Give the rate and duration for which it applies in bytes
     /// per second. Loops after it reaches the end.
     Piecewise(Vec<(f64, Time)>),
@@ -38,13 +40,22 @@ pub enum CCConfig {
     Instant,
 }
 
+/// Delay applied to packets.
+#[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
+pub enum DelayConfig {
+    Const(Time),
+    RandomMicros(RandomVariable<Poisson<f64>>),
+    RandomMillis(RandomVariable<Poisson<f64>>),
+}
+
 /// A group of senders
 #[derive(Clone, Debug)]
 pub struct SenderGroupConfig {
     /// Number of senders in this group
     pub num_senders: usize,
     /// Packets in this group experience this much fixed delay
-    pub delay: Time,
+    pub delay: DelayConfig,
     /// They use this congestion control algorithm
     pub cc: CCConfig,
     /// When should the senders start transmit?
