@@ -624,8 +624,7 @@ static void bbr_reset_probe_bw_mode(struct sock *sk)
 	struct bbr *bbr = inet_csk_ca(sk);
 
 	bbr->mode = BBR_PROBE_BW;
-	// bbr->cycle_idx = CYCLE_LEN - 1 - prandom_u32_max(bbr_cycle_rand); // Ameya
-	bbr->cycle_idx = CYCLE_LEN - 1 - (bbr_cycle_rand) / 2;
+	bbr->cycle_idx = CYCLE_LEN - 1 - (rand() % bbr_cycle_rand);
 	bbr_advance_cycle_phase(sk);	/* flip to next phase of gain cycle */
 }
 
@@ -1021,7 +1020,7 @@ static void bbr_update_gains(struct sock *sk)
 		bbr->cwnd_gain	 = BBR_UNIT;
 		break;
 	default:
-		// WARN_ONCE(1, "BBR bad mode: %u\n", bbr->mode);
+		printf("BBR bad mode: %u\n", bbr->mode);
 		break;
 	}
 }
