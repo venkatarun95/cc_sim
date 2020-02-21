@@ -165,8 +165,7 @@ void bbr_print_wrapper(BBR* bbr){
 BBR* create_bbr(){
 	BBR* bbr = malloc(sizeof(BBR));
 	memset(&(bbr -> sk), 0, sizeof(bbr -> sk));
-	bbr -> seqnum_map.start = NULL;
-	bbr -> seqnum_map.size = 0;
+	init(&(bbr -> seqnum_map));
 
 	bbr -> sk.srtt_us = 0;
     bbr -> sk.snd_cwnd = TCP_INIT_CWND;
@@ -259,7 +258,7 @@ void loop(BBR* bbr){
 	u64 seqnum = 0;
 	u64 rtt = ~0U;
 
-    for(u64 now = 100000; now < 120000; now += 10000){
+    for(u64 now = 100000; now < 220000; now += 10000){
 		seqnum += 2;
 		rtt = 40 + rand() % 20;
 
