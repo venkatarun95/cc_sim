@@ -67,6 +67,11 @@
  * Since the minimum window is >=4 packets, the lower bound isn't
  * an issue. The upper bound isn't an issue with existing technologies.
  */
+
+/* 
+ * Adapted for cc_sim by Ameya Daigavane.
+ */
+
 #define BW_SCALE 24
 #define BW_UNIT (1 << BW_SCALE)
 
@@ -1186,17 +1191,6 @@ static void __exit bbr_unregister(void)
 {
 	// tcp_unregister_congestion_control(&tcp_bbr_cong_ops);
 }
-
-// module_init(bbr_register);
-// module_exit(bbr_unregister);
-
-// MODULE_AUTHOR("Van Jacobson <vanj@google.com>");
-// MODULE_AUTHOR("Neal Cardwell <ncardwell@google.com>");
-// MODULE_AUTHOR("Yuchung Cheng <ycheng@google.com>");
-// MODULE_AUTHOR("Soheil Hassas Yeganeh <soheil@google.com>");
-// MODULE_LICENSE("Dual BSD/GPL");
-// MODULE_DESCRIPTION("TCP BBR (Bottleneck Bandwidth and RTT)");
-
 
 #undef NS_PROTOCOL
 
