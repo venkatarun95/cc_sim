@@ -10,11 +10,13 @@ mod random;
 use config::{
     CCConfig, Config, ConfigLog, ConfigTopo, LinkTraceConfig, LogType, SenderGroupConfig, DelayConfig,
 };
+use random::{
+    RandomVariable, seed,
+};
 use simulator::*;
 use topology::create_topology;
 use tracer::Tracer;
 use transport::*;
-use random::RandomVariable;
 
 use rand_distr::Poisson;
 
@@ -67,6 +69,7 @@ fn main() -> Result<(), Error> {
         random_seed: 0,
     };
 
+    seed(config.random_seed);
     let tracer = Tracer::new(&config);
     let mut sched = create_topology(&config, &tracer)?;
 
