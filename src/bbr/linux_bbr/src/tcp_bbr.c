@@ -974,6 +974,7 @@ static void bbr_update_min_rtt(struct sock *sk, const struct rate_sample *rs)
 	}
 
 	if (bbr->mode == BBR_PROBE_RTT) {
+		// printf("Yo we're in PROBE_RTT with probe_rtt_done_stamp = %lld.\n", bbr -> probe_rtt_done_stamp);
 		/* Ignore low rate samples during this mode. */
 		tp->app_limited =
 			(tp->delivered + tcp_packets_in_flight(tp)) ? : 1;
@@ -1158,10 +1159,10 @@ void bbr_print(struct sock *sk){
 	struct bbr *bbr = inet_csk_ca(sk);
 	printf("BBR Mode: %d.\n", bbr -> mode);
 	printf("Bottleneck Bandwidth: %lld Bps.\n", bbr_rate_bytes_per_sec(sk, bbr_bw(sk) << BBR_SCALE, 1));
-	printf("Pacing Gain: %f.\n", ((double)bbr->pacing_gain)/BBR_UNIT);
-	printf("Pacing Rate: %ld Bps.\n", tcp_sk(sk)->sk_pacing_rate);
+	printf("Pacing Gain: %f.\n", ((double) bbr -> pacing_gain) / BBR_UNIT);
+	printf("Pacing Rate: %ld Bps.\n", sk -> sk_pacing_rate);
 	printf("Minimum RTT: %ld us.\n", bbr -> min_rtt_us);
-	printf("Congestion Window: %ld packets.\n", tcp_sk(sk)->snd_cwnd);
+	printf("Congestion Window: %ld packets.\n", sk -> snd_cwnd);
 	printf("\n");
 }
 

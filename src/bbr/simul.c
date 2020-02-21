@@ -211,6 +211,8 @@ void on_ack(BBR* bbr, u64 now, u64 seqnum, u64 rtt, u64 num_lost){
     bbr -> sk.delivered = seqnum;
 	bbr -> sk.tcp_mstamp = now;
 	bbr -> sk.delivered_mstamp = now;
+	bbr -> sk.sacked_out = seqnum;
+	bbr -> sk.lost_out += num_lost;
 
 	bbr -> rs = create_empty_rate_sample();
 

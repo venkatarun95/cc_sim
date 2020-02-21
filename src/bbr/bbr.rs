@@ -4981,6 +4981,7 @@ extern "C" {
 #[derive(Debug, Copy, Clone)]
 pub struct node {
     pub next: *mut node,
+    pub prev: *mut node,
     pub skb: sk_buff,
     pub seqnum: ::std::os::raw::c_ulonglong,
 }
@@ -4988,7 +4989,7 @@ pub struct node {
 fn bindgen_test_layout_node() {
     assert_eq!(
         ::std::mem::size_of::<node>(),
-        88usize,
+        96usize,
         concat!("Size of: ", stringify!(node))
     );
     assert_eq!(
@@ -5007,13 +5008,23 @@ fn bindgen_test_layout_node() {
         )
     );
     assert_eq!(
-        unsafe { &(*(::std::ptr::null::<node>())).skb as *const _ as usize },
+        unsafe { &(*(::std::ptr::null::<node>())).prev as *const _ as usize },
         8usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(node),
+            "::",
+            stringify!(prev)
+        )
+    );
+    assert_eq!(
+        unsafe { &(*(::std::ptr::null::<node>())).skb as *const _ as usize },
+        16usize,
         concat!("Offset of field: ", stringify!(node), "::", stringify!(skb))
     );
     assert_eq!(
         unsafe { &(*(::std::ptr::null::<node>())).seqnum as *const _ as usize },
-        80usize,
+        88usize,
         concat!(
             "Offset of field: ",
             stringify!(node),
