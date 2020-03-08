@@ -1,4 +1,4 @@
-use crate::simulator::{SeqNum, Time};
+use crate::simulator::{PktId, SeqNum, Time};
 use crate::transport::CongestionControl;
 
 use std::cmp::min;
@@ -15,7 +15,7 @@ impl Default for AIMD {
 }
 
 impl CongestionControl for AIMD {
-    fn on_ack(&mut self, _now: Time, _ack_seq: SeqNum, _rtt: Time, num_lost: u64) {
+    fn on_ack(&mut self, _now: Time, _cum_ack: SeqNum, _ack_uid: PktId, _rtt: Time, num_lost: u64) {
         if num_lost == 0 {
             self.cwnd += 1. / self.cwnd;
         } else {
@@ -26,7 +26,7 @@ impl CongestionControl for AIMD {
         }
     }
 
-    fn on_send(&mut self, _now: Time, _seq_num: SeqNum) {}
+    fn on_send(&mut self, _now: Time, _seq_num: SeqNum, _uid: PktId) {}
 
     fn on_timeout(&mut self) {
         self.cwnd = 1.;
@@ -45,8 +45,6 @@ impl CongestionControl for AIMD {
 pub struct Instant {
     cwnd: f64,
     rtt_min: Time,
-    /// The last packet seq_num that was sent
-    last_sent_seq: SeqNum,
     /// We will update cwnd when this packet (or later) returns. We also note the time when this
     /// packet was sent. This way, we update only once per RTT. This is set by `on_send` and unset by
     /// `one_ack` or `on_timeout`.
@@ -64,7 +62,6 @@ impl Default for Instant {
         Self {
             cwnd: 1.,
             rtt_min: Time::from_micros(std::u64::MAX),
-            last_sent_seq: 0,
             waiting_seq: None,
             rtt_standing: None,
             achieved_bdp: None,
@@ -74,7 +71,7 @@ impl Default for Instant {
 
 // ATT account number 4361 5082 2804
 impl CongestionControl for Instant {
-    fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, rtt: Time, num_lost: u64) {
+    fn on_ack(&mut self, _now: Time, cum_ack: SeqNum, _ack_uid: PktId, rtt: Time, num_lost: u64) {
         // What is the maximum multiplicative increase in cwnd per RTT
         let max_incr = 2.;
         if rtt < self.rtt_min {
@@ -93,7 +90,7 @@ impl CongestionControl for Instant {
             *self.rtt_standing.as_mut().unwrap() = min(rtt, self.rtt_standing.unwrap());
             *self.achieved_bdp.as_mut().unwrap() += 1;
             // Return if we are not ready yet
-            if ack_seq < seq {
+            if cum_ack < seq {
                 return;
             }
         } else {
@@ -146,10 +143,9 @@ impl CongestionControl for Instant {
         }
     }
 
-    fn on_send(&mut self, now: Time, seq_num: SeqNum) {
-        assert!(seq_num > self.last_sent_seq);
-        self.last_sent_seq = seq_num;
+    fn on_send(&mut self, now: Time, seq_num: SeqNum, _uid: PktId) {
         if self.waiting_seq.is_none() {
+            // Warning: If this is a retransmit, then seq_num could be low. Handle this corner case
             self.waiting_seq = Some((seq_num, now));
             self.rtt_standing = Some(Time::from_micros(std::u64::MAX));
             self.achieved_bdp = Some(0);
