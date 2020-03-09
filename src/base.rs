@@ -1,6 +1,9 @@
-use crate::config::{Config, LinkTraceConfig};
+use crate::config::{Config, DelayConfig, LinkTraceConfig};
+use crate::random::RandomVariable;
 use crate::simulator::*;
 use crate::tracer::{TraceElem, Tracer};
+
+use rand_distr::*;
 
 use failure::{format_err, Error};
 use fnv::FnvHashMap;
@@ -83,6 +86,12 @@ pub enum LinkTrace<'c> {
     /// A constant link rate in bytes per second
     #[allow(dead_code)]
     Const { rate: f64, config: &'c Config },
+    /// Link rate (in bytes per second) sampled from the given distribution.
+    #[allow(dead_code)]
+    Random {
+        rate: RandomVariable<Poisson<f64>>,
+        config: &'c Config,
+    },
     /// A piecewise-constant link rate. Give the rate and duration for which it applies in bytes
     /// per second. Loops after it reaches the end.
     #[allow(dead_code)]
@@ -100,9 +109,16 @@ pub enum LinkTrace<'c> {
 }
 
 impl<'c> LinkTrace<'c> {
+    // New link with constant rate.
     #[allow(dead_code)]
     pub fn new_const(rate: f64, config: &'c Config) -> Self {
         Self::Const { rate, config }
+    }
+
+    // New link with link rate following a random distirbution.
+    #[allow(dead_code)]
+    pub fn new_random(rate: RandomVariable<Poisson<f64>>, config: &'c Config) -> Self {
+        Self::Random { rate, config }
     }
 
     /// A piecewise constant link rate trace. Give a list of rates along with how long they should
@@ -147,6 +163,7 @@ impl<'c> LinkTrace<'c> {
     pub fn from_config(link_config: &LinkTraceConfig, config: &'c Config) -> Result<Self, Error> {
         Ok(match link_config {
             LinkTraceConfig::Const(rate) => Self::new_const(*rate, config),
+            LinkTraceConfig::Random(rate) => Self::new_random(*rate, config),
             LinkTraceConfig::Piecewise(rates) => Self::new_piecewise(rates, config),
             LinkTraceConfig::MahimahiFile(fname) => Self::new_mahimahi_from_file(Path::new(fname))?,
         })
@@ -158,6 +175,10 @@ impl<'c> LinkTrace<'c> {
         match self {
             Self::Const { rate, config } => Time::from_micros(
                 (now.micros() as f64 + (1_000_000. * config.pkt_size as f64 / *rate)) as u64,
+            ),
+            Self::Random { rate, config } => Time::from_micros(
+                (now.micros() as f64 + (1_000_000. * config.pkt_size as f64 / (rate.sample())))
+                    as u64,
             ),
             Self::Piecewise {
                 rates,
@@ -281,16 +302,16 @@ impl<'a> NetObj for Link<'a> {
     }
 }
 
-/// Delays packets by a given fixed amount
+/// Delays packets by some amount.
 pub struct Delay {
-    /// The fixed delay by which packets are delayed
-    delay: Time,
+    /// The delay by which packets are delayed (either constant or random)
+    pub delay: DelayConfig,
     /// The next hop
     next: NetObjId,
 }
 
 impl Delay {
-    pub fn new(delay: Time, next: NetObjId) -> Self {
+    pub fn new(delay: DelayConfig, next: NetObjId) -> Self {
         Self { delay, next }
     }
 }
@@ -311,7 +332,15 @@ impl NetObj for Delay {
         now: Time,
         pkt: Rc<Packet>,
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
-        let deque_time = now + self.delay;
+        let deque_time = match self.delay {
+            DelayConfig::RandomMicros(mut time_us) => {
+                now + Time::from_micros(time_us.sample() as u64)
+            }
+            DelayConfig::RandomMillis(mut time_ms) => {
+                now + Time::from_millis(time_ms.sample() as u64)
+            }
+            DelayConfig::Const(time) => now + time,
+        };
         Ok(vec![(deque_time, self.next, Action::Push(pkt))])
     }
 

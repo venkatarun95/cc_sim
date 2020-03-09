@@ -83,6 +83,7 @@ enum PktStatus {
 }
 
 /// Track which packets have been received. This logic is useful for both TCP sender and receiver
+#[derive(Debug)]
 struct TrackRxPackets {
     /// The range of sequence numbers that we currently need to track (left included, right
     /// excluded). Left is the smallest sequence number
@@ -107,6 +108,9 @@ impl TrackRxPackets {
         assert!(self.status.len() == (self.range.1 - self.range.0) as usize);
         // We should never have to extend it at the left
         assert!(seq_num >= self.range.0);
+
+        println!("{} {:?} {:?}", seq_num, received, &self);
+
         // Extend our range at the right if necessary
         while seq_num >= self.range.1 {
             self.range.1 += 1;

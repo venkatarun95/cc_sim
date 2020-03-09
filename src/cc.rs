@@ -10,7 +10,7 @@ pub struct AIMD {
 
 impl Default for AIMD {
     fn default() -> Self {
-        Self { cwnd: 1. }
+        Self { cwnd: 4. }
     }
 }
 
