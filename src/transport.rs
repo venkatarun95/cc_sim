@@ -188,6 +188,18 @@ impl TrackRxPackets {
         assert!(self.range.1 >= self.range.0);
     }
 
+    /// Any non-received packets are marked as lost
+    fn mark_all_as_lost(&mut self) {
+        for x in &mut self.status {
+            if *x != PktStatus::Received {
+                if *x != PktStatus::Lost {
+                    self.num_lost += 1;
+                }
+                *x = PktStatus::Lost;
+            }
+        }
+    }
+
     /// Return the number of lost packets and the next lost packet to retransmit
     fn lost_packets(&self) -> (u64, Option<SeqNum>) {
         if self.num_lost == 0 {
@@ -524,20 +536,23 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             // It was a timeout we scheduled. See if it is still relevant
             let timeout = self.srtt + Time::from_micros(4 * self.rttvar.micros());
             if self.last_ack_time + timeout <= now {
+                // Mark all inflight packets as lost
+                self.track_rx.mark_all_as_lost();
+
                 // It was a timeout
                 self.cc.on_timeout();
-
-                // Mark all inflight packets as lost
-                for i in self.track_rx.received_till()..self.next_pkt {
-                    self.track_rx.mark_pkt(i, PktStatus::Lost);
-                }
 
                 // Trace new cwnd and timeout event
                 self.tracer
                     .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
                 self.tracer.log(obj_id, now, TraceElem::TcpSenderTimeout);
+
+                let res = self.schedule_tx(obj_id, now);
+                println!("Timeout: {} {:?}", &res[0].0, self.track_rx.lost_packets());
+                Ok(res)
+            } else {
+                Ok(Vec::new())
             }
-            Ok(Vec::new())
         } else {
             unreachable!()
         }
