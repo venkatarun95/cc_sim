@@ -109,8 +109,6 @@ impl TrackRxPackets {
         // We should never have to extend it at the left
         assert!(seq_num >= self.range.0);
 
-        println!("{} {:?} {:?}", seq_num, received, &self);
-
         // Extend our range at the right if necessary
         while seq_num >= self.range.1 {
             self.range.1 += 1;
@@ -172,7 +170,12 @@ impl TrackRxPackets {
 
     /// Total number of packets marked as received (e.g. to calculate packets in flight)
     fn num_pkts_received(&self) -> u64 {
-        self.range.0 + self.status.iter().map(|x| *x as u64).sum::<u64>()
+        self.range.0
+            + self
+                .status
+                .iter()
+                .map(|x| (*x == PktStatus::Received) as u64)
+                .sum::<u64>()
     }
 
     /// Generate upto the given number of SACK blocks
@@ -184,10 +187,10 @@ impl TrackRxPackets {
             if sack.len() == max_blocks {
                 break;
             }
-            if let Some(ref mut block_start) = block_start {
+            if let Some(block_start) = block_start {
                 // End the block?
                 if self.status[i] != PktStatus::Received {
-                    sack.push((*block_start as SeqNum, i as SeqNum + 1));
+                    sack.push((block_start as SeqNum, i as SeqNum + 1));
                 }
             } else {
                 // Start the block?
@@ -196,6 +199,16 @@ impl TrackRxPackets {
                 }
             }
         }
+        if let Some(block_start) = block_start {
+            sack.push((block_start as SeqNum, self.status.len() as SeqNum));
+        }
+
+        // Add an offset to sack blocks
+        for i in 0..sack.len() {
+            sack[i].0 += self.range.0;
+            sack[i].1 += self.range.0;
+        }
+
         sack
     }
 }
@@ -210,9 +223,8 @@ pub struct TcpSender<'a, C: CongestionControl + 'static> {
     dest: Addr,
     /// Will use this congestion control algorithm
     cc: C,
-    /// Sequence number of the last sent packet. Note: since we don't implement reliabilty, and
-    /// hence retransmission. packets in a flow have unique sequence numbers)
-    last_sent: SeqNum,
+    /// Sequence number of the next packet to send
+    next_pkt: SeqNum,
     /// Track which sent packets have been acked
     track_rx: TrackRxPackets,
     /// Last time we transmitted a packet
@@ -254,7 +266,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
             addr,
             dest,
             cc,
-            last_sent: 0,
+            next_pkt: 0,
             track_rx: TrackRxPackets::new(),
             last_tx_time: Time::from_micros(0),
             srtt: Time::from_millis(1_000),
@@ -283,7 +295,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
     fn sent_all(&self, now: Time) -> bool {
         match self.tx_length {
             TcpSenderTxLength::Duration(time) => self.start_time + time < now,
-            TcpSenderTxLength::Bytes(bytes) => self.last_sent * self.config.pkt_size >= bytes,
+            TcpSenderTxLength::Bytes(bytes) => self.next_pkt * self.config.pkt_size >= bytes,
             TcpSenderTxLength::Infinite => false,
         }
     }
@@ -292,13 +304,16 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
     /// transmission
     fn tx_packet(&mut self, obj_id: NetObjId, now: Time) -> Vec<(Time, NetObjId, Action)> {
         // Which packet should we transmit next?
-        let seq_num = if let (_, Some(seq_num)) = self.track_rx.lost_packets() {
+        let seq_num = if let Some(seq_num) = self.track_rx.lost_packets().1 {
             // Retransmit
+            println!("Retransmitting");
             seq_num
         } else {
             // Send a fresh packet
-            self.last_sent += 1;
-            self.last_sent
+            self.track_rx
+                .mark_pkt(self.next_pkt, PktStatus::NotReceieved);
+            self.next_pkt += 1;
+            self.next_pkt - 1
         };
 
         let pkt = Packet {
@@ -322,10 +337,16 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
         // See if we should transmit packets
         if !self.tx_scheduled && !self.sent_all(now) {
             let cwnd = self.cc.get_cwnd();
+            // println!(
+            //     "cwnd {} next_pkt {} num_rxed {} lost_packets {}",
+            //     cwnd,
+            //     self.next_pkt,
+            //     self.track_rx.num_pkts_received(),
+            //     self.track_rx.lost_packets().0
+            // );
+            // println!("{:?}", self.track_rx);
             if cwnd
-                > self.last_sent + 1
-                    - self.track_rx.num_pkts_received()
-                    - self.track_rx.lost_packets().0
+                > self.next_pkt - self.track_rx.num_pkts_received() - self.track_rx.lost_packets().0
             {
                 // See if we should transmit now, or schedule an event later
                 let intersend_time = self.cc.get_intersend_time();
@@ -372,8 +393,8 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             ack_uid,
         } = &pkt.ptype
         {
-            assert!(self.last_sent >= self.track_rx.received_till());
-            assert!(*cum_ack <= self.last_sent + 1);
+            assert!(self.next_pkt > self.track_rx.received_till());
+            assert!(*cum_ack <= self.next_pkt);
             if self.has_ended(now) {
                 return Ok(Vec::new());
             }
@@ -446,7 +467,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
                 self.cc.on_timeout();
 
                 // Mark all inflight packets as lost
-                for i in self.track_rx.received_till()..self.last_sent + 1 {
+                for i in self.track_rx.received_till()..self.next_pkt {
                     self.track_rx.mark_pkt(i, PktStatus::Lost);
                 }
 
