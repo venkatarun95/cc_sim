@@ -74,12 +74,28 @@ pub enum TcpSenderTxLength {
     Infinite,
 }
 
-/// To track status in TrackRxPackets
+/// To track status in TrackRxPackets. Packets that haven't been received, follow the following
+/// state machine:
+///
+///                      NotReceived(0)
+///                          |
+///                          |  3 dupacks
+///                         \ /
+///                 ------> Lost
+///                 |        |
+///       3 dupacks |        |  when retransmitted
+///                 |       \ /
+///                 --- Retransmitted(0)
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 enum PktStatus {
     Received,
-    NotReceieved,
+    /// Packet hasn't been received. Counts number of dupacks
+    NotReceieved(u64),
+    /// Has been marked as lost
     Lost,
+    /// Packet has been retransmitted. Counts number of dupacks since retransmission and notes the
+    /// sequence number when the packet was retransmitteda
+    Retransmitted(u64, SeqNum),
 }
 
 /// Track which packets have been received. This logic is useful for both TCP sender and receiver
@@ -90,6 +106,10 @@ struct TrackRxPackets {
     range: (SeqNum, SeqNum),
     /// True if and only if packet is received. Front is the left edge and back is the right edge
     status: VecDeque<PktStatus>,
+    /// Number of packets in `status` that are PktStatus::Lost
+    num_lost: u64,
+    /// Number of packets that have been marked as lost but haven't been reported to the CC yet
+    num_unreported_lost: u64,
 }
 
 impl TrackRxPackets {
@@ -97,6 +117,8 @@ impl TrackRxPackets {
         Self {
             range: (0, 0),
             status: VecDeque::new(),
+            num_lost: 0,
+            num_unreported_lost: 0,
         }
     }
 
@@ -112,11 +134,50 @@ impl TrackRxPackets {
         // Extend our range at the right if necessary
         while seq_num >= self.range.1 {
             self.range.1 += 1;
-            self.status.push_back(PktStatus::NotReceieved);
+            self.status.push_back(PktStatus::NotReceieved(0));
         }
 
         // Mark our packet
-        self.status[(seq_num - self.range.0) as usize] = received;
+        let pkt_id = (seq_num - self.range.0) as usize;
+        let prev_status = self.status[pkt_id];
+        self.status[pkt_id] = received;
+
+        // If a lost packet changed status
+        if prev_status == PktStatus::Lost && received != PktStatus::Lost {
+            self.num_lost -= 1;
+        }
+
+        // If this was a received packet, mark dupacks
+        if received == PktStatus::Received && prev_status != PktStatus::Received {
+            for id in 0..pkt_id {
+                self.status[id] = match self.status[id] {
+                    PktStatus::Received => PktStatus::Received,
+                    PktStatus::NotReceieved(i) => {
+                        if i == 2 {
+                            self.num_unreported_lost += 1;
+                            self.num_lost += 1;
+                            PktStatus::Lost
+                        } else {
+                            PktStatus::NotReceieved(i + 1)
+                        }
+                    }
+                    PktStatus::Lost => PktStatus::Lost,
+                    PktStatus::Retransmitted(i, rtx_seq) => {
+                        if seq_num > rtx_seq {
+                            if i == 2 {
+                                self.num_unreported_lost += 1;
+                                self.num_lost += 1;
+                                PktStatus::Lost
+                            } else {
+                                PktStatus::Retransmitted(i + 1, rtx_seq)
+                            }
+                        } else {
+                            PktStatus::Retransmitted(i, rtx_seq)
+                        }
+                    }
+                };
+            }
+        }
 
         // We may shrink it if all packets on the left have been acked
         while let Some(PktStatus::Received) = self.status.front() {
@@ -124,45 +185,35 @@ impl TrackRxPackets {
             self.range.0 += 1;
         }
 
-        // Note, we don't detect dupacks here. We only detect it when `Self::lost_packets` is
-        // called
-
         assert!(self.range.1 >= self.range.0);
     }
 
     /// Return the number of lost packets and the next lost packet to retransmit
-    fn lost_packets(&mut self) -> (u64, Option<SeqNum>) {
-        let mut num_lost = 0;
-        let mut next_to_retransmit = None;
-
-        // Go through the entire state and mark any packets that have 3 dupacks as lost
-        let mut num_dupacks = 0;
-        for (i, x) in self.status.iter_mut().enumerate().rev() {
-            match x {
-                PktStatus::Received => num_dupacks += 1,
-                PktStatus::NotReceieved => {
-                    if num_dupacks >= 3 {
-                        *x = PktStatus::Lost
-                    }
+    fn lost_packets(&self) -> (u64, Option<SeqNum>) {
+        if self.num_lost == 0 {
+            (0, None)
+        } else {
+            for i in 0..self.status.len() {
+                if self.status[i] == PktStatus::Lost {
+                    return (self.num_lost, Some(self.range.0 + i as u64));
                 }
-                PktStatus::Lost => {}
             }
-
-            // If this is lost, prepare the return values
-            if x == &PktStatus::Lost {
-                num_lost += 1;
-                // We want to return the earliest lost packet
-                next_to_retransmit = Some(i as u64 + self.range.0);
-            }
+            unreachable!();
         }
+    }
 
-        (num_lost, next_to_retransmit)
+    /// Return the number of lost packets that haven't been `reported'. Calling this function makes
+    /// all those packets as `reported`, and they won't be reported again
+    fn num_unreported_lost(&mut self) -> u64 {
+        let res = self.num_unreported_lost;
+        self.num_unreported_lost = 0;
+        res
     }
 
     /// Sequence number (not inclusive) till which all packets have been received
     fn received_till(&self) -> SeqNum {
         assert_ne!(
-            self.status.front().unwrap_or(&PktStatus::NotReceieved),
+            self.status.front().unwrap_or(&PktStatus::NotReceieved(0)),
             &PktStatus::Received
         );
         self.range.0
@@ -187,10 +238,11 @@ impl TrackRxPackets {
             if sack.len() == max_blocks {
                 break;
             }
-            if let Some(block_start) = block_start {
+            if let Some(start) = block_start {
                 // End the block?
                 if self.status[i] != PktStatus::Received {
-                    sack.push((block_start as SeqNum, i as SeqNum + 1));
+                    sack.push((start as SeqNum, i as SeqNum + 1));
+                    block_start = None;
                 }
             } else {
                 // Start the block?
@@ -306,12 +358,13 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
         // Which packet should we transmit next?
         let seq_num = if let Some(seq_num) = self.track_rx.lost_packets().1 {
             // Retransmit
-            println!("Retransmitting");
+            self.track_rx
+                .mark_pkt(seq_num, PktStatus::Retransmitted(0, self.next_pkt));
             seq_num
         } else {
             // Send a fresh packet
             self.track_rx
-                .mark_pkt(self.next_pkt, PktStatus::NotReceieved);
+                .mark_pkt(self.next_pkt, PktStatus::NotReceieved(0));
             self.next_pkt += 1;
             self.next_pkt - 1
         };
@@ -337,14 +390,6 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
         // See if we should transmit packets
         if !self.tx_scheduled && !self.sent_all(now) {
             let cwnd = self.cc.get_cwnd();
-            // println!(
-            //     "cwnd {} next_pkt {} num_rxed {} lost_packets {}",
-            //     cwnd,
-            //     self.next_pkt,
-            //     self.track_rx.num_pkts_received(),
-            //     self.track_rx.lost_packets().0
-            // );
-            // println!("{:?}", self.track_rx);
             if cwnd
                 > self.next_pkt - self.track_rx.num_pkts_received() - self.track_rx.lost_packets().0
             {
@@ -404,18 +449,26 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             // Mark all cumulatively acked packets are received
             let received_till = self.track_rx.received_till();
             for i in received_till..*cum_ack {
+                // received_till may have been updated, e.g. if a retransmitted packet was acked
+                if i < self.track_rx.received_till() {
+                    continue;
+                }
                 self.track_rx.mark_pkt(i, PktStatus::Received);
             }
             // Process the SACK blocks and mark all sacked packets as received
             for (left, right) in sack {
                 assert!(left < right);
                 for i in *left..*right {
+                    // received_till may have been updated, e.g. if a retransmitted packet was acked
+                    if i < self.track_rx.received_till() {
+                        continue;
+                    }
                     self.track_rx.mark_pkt(i, PktStatus::Received);
                 }
             }
 
             let rtt = now - *sent_time;
-            let num_lost = self.track_rx.lost_packets().0;
+            let num_lost = self.track_rx.num_unreported_lost();
 
             // Update srtt and rttvar
             self.rttvar = Time::from_micros(
@@ -427,15 +480,23 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
                 ((1. - 1. / 8.) * self.srtt.micros() as f64 + rtt.micros() as f64 / 8.) as u64,
             );
 
-            self.cc.on_ack(now, *cum_ack, *ack_uid, rtt, num_lost);
-
             self.tracer
                 .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
             self.tracer.log(obj_id, now, TraceElem::TcpSenderRtt(rtt));
             self.tracer
                 .log(obj_id, now, TraceElem::TcpSenderLoss(num_lost));
 
-            Ok(self.schedule_tx(obj_id, now))
+            if num_lost > 0 {
+                // If we've detected a loss, we should schedule a retransmission before the CC
+                // reduces its cwnd. This emulates a fast retransmit
+                let res = self.schedule_tx(obj_id, now);
+                self.cc.on_ack(now, *cum_ack, *ack_uid, rtt, num_lost);
+                Ok(res)
+            } else {
+                // This is business as usual
+                self.cc.on_ack(now, *cum_ack, *ack_uid, rtt, num_lost);
+                Ok(self.schedule_tx(obj_id, now))
+            }
         } else {
             unreachable!()
         }
