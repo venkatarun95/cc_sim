@@ -117,6 +117,42 @@ pub struct Packet {
     pub ptype: TransportHeader,
 }
 
+/// Convenience struct to map event uids to custom datatypes. Creates its own namespace of UIDs
+pub struct EventUidMap<T> {
+    /// Counter used to generate new UIDs
+    next_uid: u64,
+    /// Map UIDs to stored data
+    map: FnvHashMap<u64, T>,
+}
+
+impl<T> EventUidMap<T> {
+    pub fn new() -> Self {
+        Self {
+            next_uid: 0,
+            map: Default::default(),
+        }
+    }
+
+    /// Add a new event with given data, and return the UID to give to the scheduler
+    pub fn new_event(&mut self, dat: T) -> Action {
+        self.map.insert(self.next_uid, dat);
+        self.next_uid += 1;
+        Action::Event(self.next_uid - 1)
+    }
+
+    /// Retrieve event for the given UID (and delete it from own map to save memory). Returns None,
+    /// if not found
+    pub fn retrieve(&mut self, uid: u64) -> Option<T> {
+        self.map.remove(&uid)
+    }
+
+    /// Retrieve the event without deleting it
+    #[allow(dead_code)]
+    pub fn peek(&self, uid: u64) -> Option<&T> {
+        self.map.get(&uid)
+    }
+}
+
 /// An object in the network that can receive packets and events. They take object ids of
 /// themselves, so it is easy to schedule events on themselves.
 pub trait NetObj {

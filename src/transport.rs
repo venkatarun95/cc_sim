@@ -129,7 +129,10 @@ impl TrackRxPackets {
     fn mark_pkt(&mut self, seq_num: SeqNum, received: PktStatus) {
         assert!(self.status.len() == (self.range.1 - self.range.0) as usize);
         // We should never have to extend it at the left
-        assert!(seq_num >= self.range.0);
+        if seq_num < self.range.0 {
+            // Probably due to a retransmission
+            return;
+        }
 
         // Extend our range at the right if necessary
         while seq_num >= self.range.1 {
@@ -231,6 +234,15 @@ impl TrackRxPackets {
         self.range.0
     }
 
+    /// Get the status of the packet with the given sequence number
+    fn get_pkt_status(&self, seq_num: SeqNum) -> PktStatus {
+        if self.range.0 > seq_num {
+            PktStatus::Received
+        } else {
+            self.status[(seq_num - self.range.0) as usize]
+        }
+    }
+
     /// Total number of packets marked as received (e.g. to calculate packets in flight)
     fn num_pkts_received(&self) -> u64 {
         self.range.0
@@ -268,13 +280,81 @@ impl TrackRxPackets {
         }
 
         // Add an offset to sack blocks
-        for i in 0..sack.len() {
-            sack[i].0 += self.range.0;
-            sack[i].1 += self.range.0;
+        for x in &mut sack {
+            x.0 += self.range.0;
+            x.1 += self.range.0;
         }
 
         sack
     }
+}
+
+/// Helper struct to calculate retransmission timeout (RTO), in *rough* compliance with RFC 6298
+#[derive(Debug)]
+struct TcpRto {
+    /// Smoothed RTT (for computing timeout)
+    srtt: Time,
+    /// Variation of RTT (for computing timeout)
+    rttvar: Time,
+    /// Multiplier for backoff
+    backoff: u64,
+}
+
+impl TcpRto {
+    fn new() -> Self {
+        Self {
+            srtt: Time::from_secs(1),
+            rttvar: Time::from_secs(0),
+            backoff: 1,
+        }
+    }
+
+    /// Must be called whenever a new RTT estimate is available. This is needed to calculate
+    /// RTO
+    fn report_rtt(&mut self, rtt: Time) {
+        // Update srtt and rttvar
+        self.rttvar = Time::from_micros(
+            ((1. - 1. / 4.) * self.rttvar.micros() as f64
+                + 1. / 4. * (self.srtt.micros() as f64 - rtt.micros() as f64).abs())
+                as u64,
+        );
+        self.srtt = if self.srtt.micros() == 0 {
+            // First measurement?
+            Time::from_micros(rtt.micros() / 2)
+        } else {
+            Time::from_micros(
+                ((1. - 1. / 8.) * self.srtt.micros() as f64 + rtt.micros() as f64 / 8.) as u64,
+            )
+        };
+    }
+
+    /// Must be called when a timeout is triggered, so we can do some backoff
+    fn report_timeout(&mut self) {
+        self.backoff *= 2;
+    }
+
+    /// Must be called when a newly transmitted packet is acked, so we may reset the backoff
+    fn report_fresh_ack(&mut self) {
+        self.backoff = 1;
+    }
+
+    /// Returns the current RTO to use
+    fn rto(&self) -> Time {
+        // We are multiplying by two here, which may be different from what the RFC asks us to do
+        let rto = self.srtt + Time::from_micros(self.rttvar.micros() * 4);
+        let rto = rto.micros() * self.backoff;
+        // Cap the RTO at 60 seconds
+        let rto = std::cmp::min(60_000_000, rto);
+        Time::from_micros(rto)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TcpSenderEvent {
+    Transmit,
+    /// A timeout event is set for each sent packet and on each ack arrival. It includes a time. If
+    /// no packet has been acked after that time, timeout should be triggered
+    Timeout(Time),
 }
 
 /// A sender which sends a given amount of data using congestion control
@@ -293,18 +373,17 @@ pub struct TcpSender<'a, C: CongestionControl + 'static> {
     track_rx: TrackRxPackets,
     /// Last time we transmitted a packet
     last_tx_time: Time,
-    /// Smoothed RTT (for computing timeout)
-    srtt: Time,
-    /// Variation of RTT (for computing timeout)
-    rttvar: Time,
     /// Time when the last ack was received. Used for deciding when a scheduled timeout was valid
     last_ack_time: Time,
     /// Whether a transmission is currently scheduled
     tx_scheduled: bool,
+    rto: TcpRto,
     /// Time when the flow should start and end
     start_time: Time,
     /// How much should it transmit
     tx_length: TcpSenderTxLength,
+    /// Map event uids to events
+    event_uid_map: EventUidMap<TcpSenderEvent>,
     /// Tracer for events and measurements
     tracer: &'a Tracer<'a>,
     config: &'a Config,
@@ -333,12 +412,12 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
             next_pkt: 0,
             track_rx: TrackRxPackets::new(),
             last_tx_time: Time::from_micros(0),
-            srtt: Time::from_millis(1_000),
-            rttvar: Time::from_micros(0),
             last_ack_time: Time::from_micros(0),
             tx_scheduled: true,
+            rto: TcpRto::new(),
             start_time,
             tx_length,
+            event_uid_map: EventUidMap::new(),
             tracer,
             config,
         }
@@ -390,10 +469,10 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
             ptype: TransportHeader::Data { seq_num },
         };
         self.cc.on_send(now, seq_num, pkt.uid);
-        let timeout = self.srtt + Time::from_micros(4 * self.rttvar.micros());
+        let event = self.event_uid_map.new_event(TcpSenderEvent::Timeout(now));
         vec![
             (now, self.next, Action::Push(Rc::new(pkt))),
-            (now + timeout, obj_id, Action::Event(1)),
+            (now + self.rto.rto(), obj_id, event),
         ]
     }
 
@@ -408,13 +487,15 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
                 // See if we should transmit now, or schedule an event later
                 let intersend_time = self.cc.get_intersend_time();
                 let time_to_send = self.last_tx_time + intersend_time;
-                if time_to_send < now {
+                let time_to_send = if time_to_send < now {
                     // Transmit now
-                    vec![(now, obj_id, Action::Event(0))]
+                    now
                 } else {
                     // Schedule a transmission (uid = 0 denotes tx event)
-                    vec![(time_to_send, obj_id, Action::Event(0))]
-                }
+                    time_to_send
+                };
+                let event = self.event_uid_map.new_event(TcpSenderEvent::Transmit);
+                vec![(time_to_send, obj_id, event)]
             } else {
                 Vec::new()
             }
@@ -431,7 +512,8 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
         _now: Time,
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         self.tx_scheduled = true;
-        Ok(vec![(self.start_time, obj_id, Action::Event(0))])
+        let event = self.event_uid_map.new_event(TcpSenderEvent::Transmit);
+        Ok(vec![(self.start_time, obj_id, event)])
     }
 
     fn push(
@@ -482,15 +564,14 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             let rtt = now - *sent_time;
             let num_lost = self.track_rx.num_unreported_lost();
 
-            // Update srtt and rttvar
-            self.rttvar = Time::from_micros(
-                ((1. - 1. / 4.) * self.rttvar.micros() as f64
-                    + 1. / 4. * (self.srtt.micros() as f64 - rtt.micros() as f64).abs())
-                    as u64,
-            );
-            self.srtt = Time::from_micros(
-                ((1. - 1. / 8.) * self.srtt.micros() as f64 + rtt.micros() as f64 / 8.) as u64,
-            );
+            // NOTE: TCP can only estimate RTT from non-retransmitted segments, whereas QUIC can
+            // estimate it from all segments. Add a condition here to emulate standard TCP. This is
+            // currently QUIC-like, where every packet has a unique id
+            self.rto.report_rtt(rtt);
+            // Our estimate of when a new packet is acked
+            if PktStatus::NotReceieved(0) == self.track_rx.get_pkt_status(*cum_ack - 1) {
+                self.rto.report_fresh_ack();
+            }
 
             self.tracer
                 .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
@@ -526,35 +607,37 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             return Ok(Vec::new());
         }
 
-        if uid == 0 {
-            // A transmission was scheduled
-            self.tx_scheduled = false;
-            let mut res = self.tx_packet(obj_id, now);
-            res.append(&mut self.schedule_tx(obj_id, now));
-            Ok(res)
-        } else if uid == 1 {
-            // It was a timeout we scheduled. See if it is still relevant
-            let timeout = self.srtt + Time::from_micros(4 * self.rttvar.micros());
-            if self.last_ack_time + timeout <= now {
-                // Mark all inflight packets as lost
-                self.track_rx.mark_all_as_lost();
+        let event = self.event_uid_map.retrieve(uid).unwrap();
 
-                // It was a timeout
-                self.cc.on_timeout();
-
-                // Trace new cwnd and timeout event
-                self.tracer
-                    .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
-                self.tracer.log(obj_id, now, TraceElem::TcpSenderTimeout);
-
-                let res = self.schedule_tx(obj_id, now);
-                println!("Timeout: {} {:?}", &res[0].0, self.track_rx.lost_packets());
+        match event {
+            TcpSenderEvent::Transmit => {
+                // A transmission was scheduled. So transmit the packet
+                self.tx_scheduled = false;
+                let mut res = self.tx_packet(obj_id, now);
+                res.append(&mut self.schedule_tx(obj_id, now));
                 Ok(res)
-            } else {
-                Ok(Vec::new())
             }
-        } else {
-            unreachable!()
+            TcpSenderEvent::Timeout(start_time) => {
+                if self.last_ack_time < start_time {
+                    // Mark all inflight packets as lost
+                    self.track_rx.mark_all_as_lost();
+                    self.rto.report_timeout();
+
+                    // It was a timeout
+                    self.cc.on_timeout();
+
+                    // Trace new cwnd and timeout event
+                    self.tracer
+                        .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
+                    self.tracer.log(obj_id, now, TraceElem::TcpSenderTimeout);
+
+                    let res = self.schedule_tx(obj_id, now);
+                    Ok(res)
+                } else {
+                    // It was acked. All is well
+                    Ok(Vec::new())
+                }
+            }
         }
     }
 }
