@@ -6,6 +6,7 @@ use failure::Error;
 
 use std::collections::VecDeque;
 use std::rc::Rc;
+use serde::{Deserialize, Serialize};
 
 pub trait CongestionControl {
     /// Called each time an ack arrives. `loss` denotes the number of in-flight packets that are
@@ -67,7 +68,7 @@ pub enum TransportHeader {
 
 /// How long the TcpSender should send packets
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum TcpSenderTxLength {
     Duration(Time),
     Bytes(u64),

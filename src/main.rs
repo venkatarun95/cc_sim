@@ -7,25 +7,26 @@ mod topology;
 mod tracer;
 mod transport;
 
+// Internal dependencies.
 use config::{
     CCConfig, Config, ConfigLog, ConfigTopo, DelayConfig, LinkTraceConfig, LogType,
     SenderGroupConfig,
 };
-use random::{seed, RandomVariable};
+use random::{seed, CustomDistribution, RandomVariable};
 use simulator::*;
 use topology::create_topology;
 use tracer::Tracer;
 use transport::*;
+use base::BufferSize;
 
-use rand_distr::Poisson;
-
+// External dependencies.
 use failure::Error;
 
 fn main() -> Result<(), Error> {
     // Four variants of links to choose from
     let _c_link_trace = LinkTraceConfig::Const(1_500_000.);
     let _r_link_trace = LinkTraceConfig::Random(RandomVariable {
-        dist: Poisson::new(1_000_000.).unwrap(),
+        dist: CustomDistribution::Poisson(1_000_000.),
         offset: 14_000_000.,
     });
     let _p_link_trace = LinkTraceConfig::Piecewise(vec![
@@ -51,7 +52,7 @@ fn main() -> Result<(), Error> {
         pkt_size: 1500,
         sim_dur: Some(Time::from_secs(100)),
         topo: ConfigTopo {
-            link: _c_link_trace,
+            link: _r_link_trace,
             bufsize: BufferSize::Finite(100),
             sender_groups,
         },
