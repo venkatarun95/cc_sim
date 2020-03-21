@@ -8,9 +8,10 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fmt;
 use std::rc::Rc;
+use serde::{Deserialize, Serialize};
 
 /// Time in microseconds
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Time(u64);
 
 /// Unique packet ID

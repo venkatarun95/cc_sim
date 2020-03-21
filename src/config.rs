@@ -2,11 +2,12 @@
 use crate::simulator::Time;
 use crate::transport::TcpSenderTxLength;
 use crate::random::RandomVariable;
+use crate::base::BufferSize;
 
 // For random links.
-use rand_distr::*;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     /// Number of bytes in data packets
     pub pkt_size: u64,
@@ -19,12 +20,12 @@ pub struct Config {
 }
 
 /// Configure a `LinkTrace` for use in `Link`
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum LinkTraceConfig {
     /// Constant link rate in bytes per second
     Const(f64),
     /// Random link with link rate as samples from the given stationary distribution.
-    Random(RandomVariable<Poisson<f64>>),
+    Random(RandomVariable),
     /// A piecewise-constant link rate. Give the rate and duration for which it applies in bytes
     /// per second. Loops after it reaches the end.
     Piecewise(Vec<(f64, Time)>),
@@ -33,7 +34,7 @@ pub enum LinkTraceConfig {
 }
 
 /// Congestion control class
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum CCConfig {
     AIMD,
@@ -41,16 +42,16 @@ pub enum CCConfig {
 }
 
 /// Delay applied to packets.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum DelayConfig {
     Const(Time),
-    RandomMicros(RandomVariable<Poisson<f64>>),
-    RandomMillis(RandomVariable<Poisson<f64>>),
+    RandomMicros(RandomVariable),
+    RandomMillis(RandomVariable),
 }
 
 /// A group of senders
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SenderGroupConfig {
     /// Number of senders in this group
     pub num_senders: usize,
@@ -64,7 +65,7 @@ pub struct SenderGroupConfig {
 }
 
 /// Configure the topology of the network
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigTopo {
     /// How the common bottleneck link rate varies with time
     pub link: LinkTraceConfig,
@@ -73,7 +74,7 @@ pub struct ConfigTopo {
     pub sender_groups: Vec<SenderGroupConfig>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum LogType {
     /// Ignore these values whenever they are seen
     Ignore,
@@ -98,7 +99,7 @@ impl LogType {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigLog {
     /// The terminal to output graphs to. Commonly used ones: (wxt, pdfcairo, epscairo, pngcairo,
     /// svg, canvas). wxt is the interactive terminal

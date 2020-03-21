@@ -3,13 +3,13 @@ use crate::random::RandomVariable;
 use crate::simulator::*;
 use crate::tracer::{TraceElem, Tracer};
 
-use rand_distr::*;
-
+// External dependencies.
 use failure::{format_err, Error};
 use fnv::FnvHashMap;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::rc::Rc;
+use serde::{Deserialize, Serialize};
 
 /// A router with configurable routes
 pub struct Router {
@@ -89,7 +89,7 @@ pub enum LinkTrace<'c> {
     /// Link rate (in bytes per second) sampled from the given distribution.
     #[allow(dead_code)]
     Random {
-        rate: RandomVariable<Poisson<f64>>,
+        rate: RandomVariable,
         config: &'c Config,
     },
     /// A piecewise-constant link rate. Give the rate and duration for which it applies in bytes
@@ -117,7 +117,7 @@ impl<'c> LinkTrace<'c> {
 
     // New link with link rate following a random distirbution.
     #[allow(dead_code)]
-    pub fn new_random(rate: RandomVariable<Poisson<f64>>, config: &'c Config) -> Self {
+    pub fn new_random(rate: RandomVariable, config: &'c Config) -> Self {
         Self::Random { rate, config }
     }
 
@@ -207,7 +207,7 @@ impl<'c> LinkTrace<'c> {
 
 /// Size of a Buffer.
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum BufferSize {
     Finite(usize),
     Infinite,
