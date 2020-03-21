@@ -52,7 +52,7 @@ fn main() -> Result<(), Error> {
         sim_dur: Some(Time::from_secs(100)),
         topo: ConfigTopo {
             link: _c_link_trace,
-            bufsize: Some(100),
+            bufsize: BufferSize::Finite(100),
             sender_groups,
         },
         log: ConfigLog {

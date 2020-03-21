@@ -69,7 +69,7 @@ pub struct ConfigTopo {
     /// How the common bottleneck link rate varies with time
     pub link: LinkTraceConfig,
     /// Buffer size of the bottleneck link
-    pub bufsize: Option<usize>,
+    pub bufsize: BufferSize,
     pub sender_groups: Vec<SenderGroupConfig>,
 }
 

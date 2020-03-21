@@ -205,13 +205,21 @@ impl<'c> LinkTrace<'c> {
     }
 }
 
+/// Size of a Buffer.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+pub enum BufferSize {
+    Finite(usize),
+    Infinite,
+}
+
 /// A link whose rate can be configured with LinkTrace
 #[allow(dead_code)]
 pub struct Link<'a> {
     /// This tells us of transmit opportunities
     link_trace: LinkTrace<'a>,
-    /// Maximum number of packets that can be buffered. If `None`, creates an infinite buffer
-    bufsize: Option<usize>,
+    /// Maximum number of packets that can be buffered.
+    bufsize: BufferSize,
     /// The next hop which will receve packets
     next: NetObjId,
     /// The packets currently in the link (either queued or being served)
@@ -226,7 +234,7 @@ impl<'a> Link<'a> {
     /// Link rate in bytes/sec and buffer size in packets (if `None`, buffer is infinite)
     pub fn new(
         link_trace: LinkTrace<'a>,
-        bufsize: Option<usize>,
+        bufsize: BufferSize,
         next: NetObjId,
         tracer: &'a Tracer,
         config: &'a Config,
@@ -260,11 +268,13 @@ impl<'a> NetObj for Link<'a> {
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         self.tracer
             .log(obj_id, now, TraceElem::LinkIngress(pkt.src, pkt.size));
-        if let Some(bufsize) = self.bufsize {
-            if self.buffer.len() >= bufsize {
+
+        if let BufferSize::Finite(size) = self.bufsize {
+            if self.buffer.len() >= size {
                 return Ok(Vec::new());
             }
         }
+
         self.buffer.push_back(pkt);
         Ok(Vec::new())
     }
