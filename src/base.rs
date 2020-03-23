@@ -1,16 +1,15 @@
-use crate::config::{Config, LinkTraceConfig};
+use crate::config::{Config, DelayConfig, LinkTraceConfig};
+use crate::random::RandomVariable;
 use crate::simulator::*;
 use crate::tracer::{TraceElem, Tracer};
-use crate::random::RandomVariable;
 
-use rand_distr::Poisson;
-use rand::rngs::StdRng;
-
+// External dependencies.
 use failure::{format_err, Error};
 use fnv::FnvHashMap;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::rc::Rc;
+use serde::{Deserialize, Serialize};
 
 /// A router with configurable routes
 pub struct Router {
@@ -89,7 +88,10 @@ pub enum LinkTrace<'c> {
     Const { rate: f64, config: &'c Config },
     /// Link rate (in bytes per second) sampled from the given distribution.
     #[allow(dead_code)]
-    Random { rate: RandomVariable<Poisson<f64>, StdRng>, config: &'c Config},
+    Random {
+        rate: RandomVariable,
+        config: &'c Config,
+    },
     /// A piecewise-constant link rate. Give the rate and duration for which it applies in bytes
     /// per second. Loops after it reaches the end.
     #[allow(dead_code)]
@@ -115,7 +117,7 @@ impl<'c> LinkTrace<'c> {
 
     // New link with link rate following a random distirbution.
     #[allow(dead_code)]
-    pub fn new_random(rate: RandomVariable<Poisson<f64>, StdRng>, config: &'c Config) -> Self {
+    pub fn new_random(rate: RandomVariable, config: &'c Config) -> Self {
         Self::Random { rate, config }
     }
 
@@ -161,7 +163,7 @@ impl<'c> LinkTrace<'c> {
     pub fn from_config(link_config: &LinkTraceConfig, config: &'c Config) -> Result<Self, Error> {
         Ok(match link_config {
             LinkTraceConfig::Const(rate) => Self::new_const(*rate, config),
-            LinkTraceConfig::Random(rate) => Self::new_random(rate.clone(), config),
+            LinkTraceConfig::Random(rate) => Self::new_random(*rate, config),
             LinkTraceConfig::Piecewise(rates) => Self::new_piecewise(rates, config),
             LinkTraceConfig::MahimahiFile(fname) => Self::new_mahimahi_from_file(Path::new(fname))?,
         })
@@ -175,7 +177,8 @@ impl<'c> LinkTrace<'c> {
                 (now.micros() as f64 + (1_000_000. * config.pkt_size as f64 / *rate)) as u64,
             ),
             Self::Random { rate, config } => Time::from_micros(
-                (now.micros() as f64 + (1_000_000. * config.pkt_size as f64 / (rate.sample()))) as u64,
+                (now.micros() as f64 + (1_000_000. * config.pkt_size as f64 / (rate.sample())))
+                    as u64,
             ),
             Self::Piecewise {
                 rates,
@@ -202,13 +205,21 @@ impl<'c> LinkTrace<'c> {
     }
 }
 
+/// Size of a Buffer.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum BufferSize {
+    Finite(usize),
+    Infinite,
+}
+
 /// A link whose rate can be configured with LinkTrace
 #[allow(dead_code)]
 pub struct Link<'a> {
     /// This tells us of transmit opportunities
     link_trace: LinkTrace<'a>,
-    /// Maximum number of packets that can be buffered. If `None`, creates an infinite buffer
-    bufsize: Option<usize>,
+    /// Maximum number of packets that can be buffered.
+    bufsize: BufferSize,
     /// The next hop which will receve packets
     next: NetObjId,
     /// The packets currently in the link (either queued or being served)
@@ -223,7 +234,7 @@ impl<'a> Link<'a> {
     /// Link rate in bytes/sec and buffer size in packets (if `None`, buffer is infinite)
     pub fn new(
         link_trace: LinkTrace<'a>,
-        bufsize: Option<usize>,
+        bufsize: BufferSize,
         next: NetObjId,
         tracer: &'a Tracer,
         config: &'a Config,
@@ -257,11 +268,13 @@ impl<'a> NetObj for Link<'a> {
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         self.tracer
             .log(obj_id, now, TraceElem::LinkIngress(pkt.src, pkt.size));
-        if let Some(bufsize) = self.bufsize {
-            if self.buffer.len() >= bufsize {
+
+        if let BufferSize::Finite(size) = self.bufsize {
+            if self.buffer.len() >= size {
                 return Ok(Vec::new());
             }
         }
+
         self.buffer.push_back(pkt);
         Ok(Vec::new())
     }
@@ -299,16 +312,16 @@ impl<'a> NetObj for Link<'a> {
     }
 }
 
-/// Delays packets by a given fixed amount
+/// Delays packets by some amount.
 pub struct Delay {
-    /// The fixed delay by which packets are delayed
-    delay: Time,
+    /// The delay by which packets are delayed (either constant or random)
+    pub delay: DelayConfig,
     /// The next hop
     next: NetObjId,
 }
 
 impl Delay {
-    pub fn new(delay: Time, next: NetObjId) -> Self {
+    pub fn new(delay: DelayConfig, next: NetObjId) -> Self {
         Self { delay, next }
     }
 }
@@ -329,7 +342,15 @@ impl NetObj for Delay {
         now: Time,
         pkt: Rc<Packet>,
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
-        let deque_time = now + self.delay;
+        let deque_time = match self.delay {
+            DelayConfig::RandomMicros(mut time_us) => {
+                now + Time::from_micros(time_us.sample() as u64)
+            }
+            DelayConfig::RandomMillis(mut time_ms) => {
+                now + Time::from_millis(time_ms.sample() as u64)
+            }
+            DelayConfig::Const(time) => now + time,
+        };
         Ok(vec![(deque_time, self.next, Action::Push(pkt))])
     }
 
@@ -341,64 +362,5 @@ impl NetObj for Delay {
         _: u64,
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         Ok(Vec::new())
-    }
-}
-
-/// Acks every packet it receives to the sender via the given next-hop
-pub struct Acker {
-    /// The next hop over which to send all acks
-    next: NetObjId,
-    /// The address of this acker
-    addr: Addr,
-}
-
-impl Acker {
-    pub fn new(addr: Addr, next: NetObjId) -> Self {
-        Self { next, addr }
-    }
-}
-
-impl NetObj for Acker {
-    fn init(&mut self, _: NetObjId, _: Time) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
-        Ok(Vec::new())
-    }
-
-    fn push(
-        &mut self,
-        _obj_id: NetObjId,
-        _from: NetObjId,
-        now: Time,
-        pkt: Rc<Packet>,
-    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
-        // Make sure this is the intended recipient
-        assert_eq!(self.addr, pkt.dest);
-        let ack = if let PacketType::Data { seq_num } = pkt.ptype {
-            Packet {
-                uid: get_next_pkt_seq_num(),
-                sent_time: now,
-                size: 40,
-                dest: pkt.src,
-                src: self.addr,
-                ptype: PacketType::Ack {
-                    sent_time: pkt.sent_time,
-                    ack_uid: pkt.uid,
-                    ack_seq: seq_num,
-                },
-            }
-        } else {
-            unreachable!();
-        };
-
-        Ok(vec![(now, self.next, Action::Push(Rc::new(ack)))])
-    }
-
-    fn event(
-        &mut self,
-        _obj_id: NetObjId,
-        _from: NetObjId,
-        _now: Time,
-        _uid: u64,
-    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
-        unreachable!()
     }
 }

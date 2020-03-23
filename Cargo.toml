@@ -18,3 +18,5 @@ priority-queue = "0.6"
 gnuplot = "0.0"
 rand = "0.7.3"
 rand_distr = "0.2.2"
+serde_yaml = "0.8.11"
+serde = { version = "1.0", features = ["derive"] }

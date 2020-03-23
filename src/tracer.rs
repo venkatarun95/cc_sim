@@ -3,7 +3,6 @@
 use crate::config::Config;
 use crate::simulator::*;
 
-use gnuplot;
 use gnuplot::AxesCommon;
 
 use std::cell::RefCell;

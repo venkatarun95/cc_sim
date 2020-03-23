@@ -1,15 +1,33 @@
 //! Common, basic functionality for the simulator.
 
+use crate::transport::TransportHeader;
+
 use failure::{format_err, Error};
 use fnv::FnvHashMap;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fmt;
 use std::rc::Rc;
+use serde::{Deserialize, Serialize};
 
 /// Time in microseconds
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Time(u64);
+
+/// Unique packet ID
+#[derive(Copy, Clone, Debug, Hash)]
+pub struct PktId(u64);
+
+/// Used to allocate fresh, uniqe ids to packets
+static mut NEXT_SEQ_NUM: u64 = 0;
+impl PktId {
+    pub fn next() -> Self {
+        unsafe {
+            NEXT_SEQ_NUM += 1;
+            Self(NEXT_SEQ_NUM)
+        }
+    }
+}
 
 /// TCP sequence number (in packets)
 pub type SeqNum = u64;
@@ -20,16 +38,6 @@ pub type NetObjId = usize;
 /// Address of a destination
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Addr(u64);
-
-/// Used to allocate fresh, uniqe sequence numbers
-pub static mut NEXT_SEQ_NUM: SeqNum = 0;
-
-pub fn get_next_pkt_seq_num() -> SeqNum {
-    unsafe {
-        NEXT_SEQ_NUM += 1;
-        NEXT_SEQ_NUM
-    }
-}
 
 impl fmt::Display for Addr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -98,32 +106,52 @@ impl Time {
 }
 
 #[derive(Debug, Hash)]
-pub enum PacketType {
-    Data {
-        /// Sequence number of the packet
-        seq_num: SeqNum,
-    },
-    Ack {
-        /// Time when the packet being acked was sent
-        sent_time: Time,
-        /// UID for the packet being acked
-        ack_uid: SeqNum,
-        /// Sequence number of the packet being acked
-        ack_seq: SeqNum,
-    },
-}
-
-#[derive(Debug, Hash)]
 pub struct Packet {
     /// Unique id for the packet
-    pub uid: u64,
+    pub uid: PktId,
     /// Time when the packet was sent
     pub sent_time: Time,
     /// Sice of the packet (in bytes)
     pub size: u64,
     pub dest: Addr,
     pub src: Addr,
-    pub ptype: PacketType,
+    pub ptype: TransportHeader,
+}
+
+/// Convenience struct to map event uids to custom datatypes. Creates its own namespace of UIDs
+pub struct EventUidMap<T> {
+    /// Counter used to generate new UIDs
+    next_uid: u64,
+    /// Map UIDs to stored data
+    map: FnvHashMap<u64, T>,
+}
+
+impl<T> EventUidMap<T> {
+    pub fn new() -> Self {
+        Self {
+            next_uid: 0,
+            map: Default::default(),
+        }
+    }
+
+    /// Add a new event with given data, and return the UID to give to the scheduler
+    pub fn new_event(&mut self, dat: T) -> Action {
+        self.map.insert(self.next_uid, dat);
+        self.next_uid += 1;
+        Action::Event(self.next_uid - 1)
+    }
+
+    /// Retrieve event for the given UID (and delete it from own map to save memory). Returns None,
+    /// if not found
+    pub fn retrieve(&mut self, uid: u64) -> Option<T> {
+        self.map.remove(&uid)
+    }
+
+    /// Retrieve the event without deleting it
+    #[allow(dead_code)]
+    pub fn peek(&self, uid: u64) -> Option<&T> {
+        self.map.get(&uid)
+    }
 }
 
 /// An object in the network that can receive packets and events. They take object ids of
