@@ -16,9 +16,7 @@ impl Default for AIMD {
 }
 
 impl CongestionControl for AIMD {
-    fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, _rtt: Time, num_lost: u64) {
-        println!("Received ACK for {}", ack_seq);
-
+    fn on_ack(&mut self, _now: Time, _cum_ack: SeqNum, _ack_uid: PktId, _rtt: Time, num_lost: u64) {
         if num_lost == 0 {
             self.cwnd += 1. / self.cwnd;
         } else {
@@ -29,9 +27,7 @@ impl CongestionControl for AIMD {
         }
     }
 
-    fn on_send(&mut self, _now: Time, seq_num: SeqNum) {
-        println!("Sent {}", seq_num);
-    }
+    fn on_send(&mut self, _now: Time, _seq_num: SeqNum, _uid: PktId) {}
 
     fn on_timeout(&mut self) {
         self.cwnd = 1.;
@@ -76,9 +72,7 @@ impl Default for Instant {
 
 // ATT account number 4361 5082 2804
 impl CongestionControl for Instant {
-    fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, rtt: Time, num_lost: u64) {
-        println!("Received ACK for {}", ack_seq);
-
+    fn on_ack(&mut self, _now: Time, cum_ack: SeqNum, _ack_uid: PktId, rtt: Time, num_lost: u64) {
         // What is the maximum multiplicative increase in cwnd per RTT
         let max_incr = 2.;
         if rtt < self.rtt_min {
@@ -150,11 +144,7 @@ impl CongestionControl for Instant {
         }
     }
 
-    fn on_send(&mut self, now: Time, seq_num: SeqNum) {
-        println!("Sent {}", seq_num);
-
-        assert!(seq_num > self.last_sent_seq);
-        self.last_sent_seq = seq_num;
+    fn on_send(&mut self, now: Time, seq_num: SeqNum, _uid: PktId) {
         if self.waiting_seq.is_none() {
             // Warning: If this is a retransmit, then seq_num could be low. Handle this corner case
             self.waiting_seq = Some((seq_num, now));
@@ -197,15 +187,15 @@ impl Default for BBR_Wrapper {
 }
 
 impl CongestionControl for BBR_Wrapper {
-    fn on_ack(&mut self, _now: Time, ack_seq: SeqNum, _rtt: Time, num_lost: u64) {
-        println!("Received ACK for {}", ack_seq);
+    fn on_ack(&mut self, _now: Time, cum_ack: SeqNum, _ack_uid: PktId, rtt: Time, num_lost: u64) {
+        println!("Received ACK for {}", cum_ack);
         unsafe {
             bbr_print_wrapper(self.bbr_ptr);
-            on_ack(self.bbr_ptr, self.init_time_us + _now.micros(), ack_seq, _rtt.micros(), num_lost);
+            on_ack(self.bbr_ptr, self.init_time_us + _now.micros(), cum_ack, rtt.micros(), num_lost);
         }
     }
 
-    fn on_send(&mut self, _now: Time, seq_num: SeqNum) {
+    fn on_send(&mut self, _now: Time, seq_num: SeqNum, _uid: PktId) {
         println!("Sent {}", seq_num);
         unsafe {
             // bbr_print_wrapper(self.bbr_ptr);
