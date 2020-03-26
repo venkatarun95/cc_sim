@@ -1,3 +1,6 @@
+# cc_sim
+A discrete-event simulator that allows for rapid prototyping of congestion control algorithms.
+
 ## Execution
 ```rust
 cargo run --release -- path-to-config-file
