@@ -1,11 +1,11 @@
 ## Execution
 ```rust
-cargo run --release -- *path-to-config-file*
+cargo run --release -- path-to-config-file
 ```
 Release mode is preferred because of its faster execution speed.
 
 ## Creating Config Files
-Our suggestion is to directly create a YAML file following *example_config.yaml*.
+Our suggestion is to directly create a YAML file following *example_config.yaml*.  
 Another option is to create a config file within Rust. For example, *example_config.yaml* can be created by:
 ```rust
 use config::{
