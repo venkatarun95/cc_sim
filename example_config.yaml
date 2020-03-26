@@ -1,0 +1,34 @@
+---
+pkt_size: 1500
+sim_dur: 100000000
+log:
+  out_terminal: png
+  out_file: out.png
+  cwnd: Plot
+  rtt: Plot
+  sender_losses: Ignore
+  timeouts: Ignore
+  link_rates: Plot
+  link_bucket_size: 1000000
+topo:
+  link:
+    Random:
+      dist:
+        Poisson: 1000000.0
+      offset: 14000000.0
+  bufsize:
+    Finite: 100
+  sender_groups:
+    - num_senders: 1
+      delay:
+        Const: 50000
+      cc: AIMD
+      start_time: 0
+      tx_length: Infinite
+    - num_senders: 1
+      delay:
+        Const: 50000
+      cc: AIMD
+      start_time: 2000000
+      tx_length: Infinite
+random_seed: 0
