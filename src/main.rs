@@ -21,53 +21,23 @@ use base::BufferSize;
 
 // External dependencies.
 use failure::Error;
+use structopt::StructOpt;
+use std::fs;
+
+
+#[derive(StructOpt)]
+struct CommandLineArgs {
+    /// The path to the config file to read.
+    #[structopt(parse(from_os_str))]
+    config_file: std::path::PathBuf,
+}
 
 fn main() -> Result<(), Error> {
-    // Four variants of links to choose from
-    let _c_link_trace = LinkTraceConfig::Const(1_500_000.);
-    let _r_link_trace = LinkTraceConfig::Random(RandomVariable {
-        dist: CustomDistribution::Poisson(1_000_000.),
-        offset: 14_000_000.,
-    });
-    let _p_link_trace = LinkTraceConfig::Piecewise(vec![
-        (1_500_000., Time::from_secs(20)),
-        (15_000_000., Time::from_secs(20)),
-    ]);
-    let _m_link_trace = LinkTraceConfig::MahimahiFile("traces/TMobile-LTE-driving.up".to_string());
 
-    // Configure senders
-    let mut sender_groups = Vec::new();
-    for i in 0..1 {
-        sender_groups.push(SenderGroupConfig {
-            num_senders: 1,
-            delay: DelayConfig::Const(Time::from_millis(50)),
-            cc: CCConfig::BBR,
-            start_time: Time::from_secs(i * 2),
-            tx_length: TcpSenderTxLength::Infinite,
-        });
-    }
+    let args = CommandLineArgs::from_args();
 
-    // Create configuration
-    let config = Config {
-        pkt_size: 1500,
-        sim_dur: Some(Time::from_secs(100)),
-        topo: ConfigTopo {
-            link: _r_link_trace,
-            bufsize: BufferSize::Finite(100),
-            sender_groups,
-        },
-        log: ConfigLog {
-            out_terminal: "png".to_string(),
-            out_file: "bbr.png".to_string(),
-            cwnd: LogType::Plot,
-            rtt: LogType::Plot,
-            sender_losses: LogType::Ignore,
-            timeouts: LogType::Ignore,
-            link_rates: LogType::Plot,
-            link_bucket_size: Time::from_micros(1_000_000),
-        },
-        random_seed: 0,
-    };
+    let config_str = fs::read_to_string(args.config_file).expect("Unable to read YAML config file.");
+    let config: Config = serde_yaml::from_str(&config_str)?;
 
     seed(config.random_seed);
     let tracer = Tracer::new(&config);
