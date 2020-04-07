@@ -255,12 +255,12 @@ impl TrackRxPackets {
     }
 
     /// Generate upto the given number of SACK blocks
-    fn generate_sack(&self, max_blocks: usize) -> Vec<(SeqNum, SeqNum)> {
+    fn generate_sack(&self, max_blocks: Option<usize>) -> Vec<(SeqNum, SeqNum)> {
         assert!(self.status.len() == (self.range.1 - self.range.0) as usize);
         let mut sack = Vec::new();
         let mut block_start = None;
         for i in 0..self.status.len() {
-            if sack.len() == max_blocks {
+            if sack.len() == max_blocks.unwrap_or(std::usize::MAX) {
                 break;
             }
             if let Some(start) = block_start {
@@ -693,7 +693,11 @@ impl NetObj for Acker {
                     sent_time: pkt.sent_time,
                     ack_uid: pkt.uid,
                     cum_ack: self.track_rx.received_till(),
-                    sack: self.track_rx.generate_sack(3),
+                    // WARNING: Right now, not setting any limit on how many sack blocks may be
+                    // sent. This helps with the case where multiple packets are lost. A more
+                    // realistic approach is to SACK each block at most 3 times, and then move on
+                    // to later blocks
+                    sack: self.track_rx.generate_sack(None),
                 },
             }
         } else {
