@@ -206,7 +206,7 @@ void on_ack(BBR* bbr, u64 now, u64 seqnum, u64 rtt, u64 num_lost){
     cwnd_event(bbr, CA_EVENT_FAST_ACK);
 
 	u64 newly_delivered = 1;
-	u64 in_flight = seqnum - bbr -> sk.packets_out;
+	u64 in_flight = bbr -> seqnum_map.size;
 
     bbr -> sk.delivered = seqnum;
 	bbr -> sk.tcp_mstamp = now;
@@ -236,7 +236,7 @@ void on_send(BBR* bbr, u64 now, u64 seqnum){
 	tcp_rate_skb_sent(bbr, now_ns, seqnum);
     
 	bbr -> sk.tcp_mstamp = now;
-	bbr -> sk.packets_out = seqnum;
+	bbr -> sk.packets_out = max(bbr -> sk.packets_out, seqnum);
 }
 
 /// Called if the sender timed out
@@ -256,32 +256,32 @@ u64 get_intersend_time(BBR* bbr){
 
 
 // Simple send-and-receive test loop.
-void loop(BBR* bbr){
-	u64 seqnum = 0;
-	u64 rtt = ~0U;
+// void loop(BBR* bbr){
+// 	u64 seqnum = 0;
+// 	u64 rtt = ~0U;
 
-    for(u64 now = 100000; now < 220000; now += 10000){
-		seqnum += 2;
-		rtt = 40 + rand() % 20;
+//     for(u64 now = 100000; now < 220000; now += 10000){
+// 		seqnum += 2;
+// 		rtt = 40 + rand() % 20;
 
-		printf("Time = %lld ms:\n", now/1000);
-		printf("Sending segment with seqnum = %lld...\n", seqnum);
-        on_send(bbr, now, seqnum);
-		printf("Sending segment with seqnum = %lld...\n", seqnum + 1);
-		on_send(bbr, now, seqnum + 1);
+// 		printf("Time = %lld ms:\n", now/1000);
+// 		printf("Sending segment with seqnum = %lld...\n", seqnum);
+//         on_send(bbr, now, seqnum);
+// 		printf("Sending segment with seqnum = %lld...\n", seqnum + 1);
+// 		on_send(bbr, now, seqnum + 1);
 
-		bbr_print_wrapper(bbr);
+// 		bbr_print_wrapper(bbr);
 
-		printf("Time = %lld ms:\n", (now + rtt)/1000);
-		printf("Received ACK for segment with seqnum = %lld...\n", seqnum);
-        on_ack(bbr, now + rtt, seqnum, rtt, 0);
-		printf("Received ACK for segment with seqnum = %lld...\n", seqnum + 1);
-        on_ack(bbr, now + rtt, seqnum + 1, rtt, 0);
-		bbr_print_wrapper(bbr);
+// 		printf("Time = %lld ms:\n", (now + rtt)/1000);
+// 		printf("Received ACK for segment with seqnum = %lld...\n", seqnum);
+//         on_ack(bbr, now + rtt, seqnum, rtt, 0);
+// 		printf("Received ACK for segment with seqnum = %lld...\n", seqnum + 1);
+//         on_ack(bbr, now + rtt, seqnum + 1, rtt, 0);
+// 		bbr_print_wrapper(bbr);
 
-		printf("--------\n");
-    }
-}
+// 		printf("--------\n");
+//     }
+// }
 
 // int main(){
 // 	printf("Welcome to Ameya's hack for TCP-BBR!\n");
