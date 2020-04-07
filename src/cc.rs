@@ -17,6 +17,7 @@ impl Default for AIMD {
 
 impl CongestionControl for AIMD {
     fn on_ack(&mut self, _now: Time, _cum_ack: SeqNum, _ack_uid: PktId, _rtt: Time, num_lost: u64) {
+        println!("ACK {}!", _cum_ack);
         if num_lost == 0 {
             self.cwnd += 1. / self.cwnd;
         } else {
@@ -30,6 +31,7 @@ impl CongestionControl for AIMD {
     fn on_send(&mut self, _now: Time, _seq_num: SeqNum, _uid: PktId) {}
 
     fn on_timeout(&mut self) {
+        println!("TIMEOUT!");
         self.cwnd = 1.;
     }
 
@@ -173,6 +175,7 @@ impl CongestionControl for Instant {
 pub struct BBR_Wrapper{
     bbr_ptr: *mut BBR,
     init_time_us: u64,
+    to_be_acked: u64,
 }
 
 impl Default for BBR_Wrapper {
@@ -181,6 +184,7 @@ impl Default for BBR_Wrapper {
             BBR_Wrapper{
                 bbr_ptr: create_bbr(),
                 init_time_us: 1000,
+                to_be_acked: std::u64::MAX,
             }
         }
     }
@@ -188,25 +192,43 @@ impl Default for BBR_Wrapper {
 
 impl CongestionControl for BBR_Wrapper {
     fn on_ack(&mut self, _now: Time, cum_ack: SeqNum, _ack_uid: PktId, rtt: Time, num_lost: u64) {
-        println!("Received ACK for {}", cum_ack);
+        println!("Entering on_ack() with cum_ack = {}.", cum_ack);
         unsafe {
-            bbr_print_wrapper(self.bbr_ptr);
-            on_ack(self.bbr_ptr, self.init_time_us + _now.micros(), cum_ack, rtt.micros(), num_lost);
+            if self.to_be_acked != cum_ack {
+                // bbr_print_wrapper(self.bbr_ptr);
+            }
+            
+            for seq_num in self.to_be_acked .. cum_ack {
+                // println!("Received ACK for {}.", seq_num);
+                on_ack(self.bbr_ptr, self.init_time_us + _now.micros(), seq_num, rtt.micros(), num_lost);
+            }
+
+            self.to_be_acked = cum_ack;
+            
+            if num_lost > 0 {
+                self.on_timeout();
+            }
         }
+        println!("Exiting on_ack with cum_ack = {}.", cum_ack);
     }
 
     fn on_send(&mut self, _now: Time, seq_num: SeqNum, _uid: PktId) {
-        println!("Sent {}", seq_num);
+        println!("Entering on_send() with seq_num = {}.", seq_num);
+        // println!("Sent {}", seq_num);
         unsafe {
             // bbr_print_wrapper(self.bbr_ptr);
             on_send(self.bbr_ptr, self.init_time_us + _now.micros(), seq_num);
         }
+        // println!("SENT!");
+        println!("Exiting on_send() with seq_num = {}.", seq_num);
     }
 
     fn on_timeout(&mut self) {
+        println!("Entering on_timeout().");
         unsafe {
             on_timeout(self.bbr_ptr);
-        }
+        }        
+        println!("Exiting on_timeout().");
     }
 
     fn get_cwnd(&mut self) -> u64 {
