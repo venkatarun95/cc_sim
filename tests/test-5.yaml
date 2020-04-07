@@ -3,7 +3,7 @@ pkt_size: 1500
 sim_dur: 100000000
 log:
   out_terminal: png
-  out_file: test-4.png
+  out_file: test-5.png
   cwnd: Plot
   rtt: Plot
   sender_losses: Ignore
