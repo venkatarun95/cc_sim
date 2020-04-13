@@ -23,7 +23,7 @@ topo:
     - num_senders: 5
       delay:
         Const: 50000
-      cc: AIMD
+      cc: 
       start_time: 0
       tx_length: Infinite
 random_seed: 0
