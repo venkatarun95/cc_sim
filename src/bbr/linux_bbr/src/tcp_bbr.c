@@ -492,6 +492,9 @@ static bool bbr_set_cwnd_to_recover_or_restore(
 	 * Then, in bbr_set_cwnd() we slow start up toward the target cwnd.
 	 */
 	if (rs->losses > 0)
+		printf("rs->losses = %ld", rs->losses);
+
+	if (rs->losses > 0)
 		cwnd = max_t(s32, cwnd - rs->losses, 1);
 
 	if (state == TCP_CA_Recovery && prev_state != TCP_CA_Recovery) {
@@ -534,13 +537,15 @@ static void bbr_set_cwnd(struct sock *sk, const struct rate_sample *rs,
 		goto done;
 
 	target_cwnd = bbr_bdp(sk, bw, gain);
-	// printf("cwnd = %ld, target cwnd = %ld\n", cwnd, target_cwnd);
+	printf("cwnd = %ld, target cwnd = %ld\n", cwnd, target_cwnd);
 
 	/* Increment the cwnd to account for excess ACKed data that seems
 	 * due to aggregation (of data and/or ACKs) visible in the ACK stream.
 	 */
 	target_cwnd += bbr_ack_aggregation_cwnd(sk);
 	target_cwnd = bbr_quantization_budget(sk, target_cwnd);
+
+	printf("bbr_full_bw_reached = %d\n", bbr_full_bw_reached(sk));
 
 	/* If we're below target cwnd, slow start cwnd toward target cwnd. */
 	if (bbr_full_bw_reached(sk))  /* only cut cwnd if we filled the pipe */
@@ -888,14 +893,16 @@ static void bbr_check_full_bw_reached(struct sock *sk,
 	if (bbr_full_bw_reached(sk) || !bbr->round_start || rs->is_app_limited)
 		return;
 
-
 	bw_thresh = (u64)bbr->full_bw * bbr_full_bw_thresh >> BBR_SCALE;
 	if (bbr_max_bw(sk) >= bw_thresh) {
+		printf("bbr_max_bw(sk)=%ld, bw_thresh=%ld\n", bbr_max_bw(sk), bw_thresh);
 		bbr->full_bw = bbr_max_bw(sk);
 		bbr->full_bw_cnt = 0;
 		return;
 	}
 	++bbr->full_bw_cnt;
+	printf("bbr->full_bw_cnt = %ld", bbr->full_bw_cnt);
+
 	bbr->full_bw_reached = bbr->full_bw_cnt >= bbr_full_bw_cnt;
 }
 

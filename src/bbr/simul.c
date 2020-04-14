@@ -91,8 +91,8 @@ void tcp_rate_gen(BBR* bbr, u64 newly_delivered, u64 in_flight, u64 rtt, u64 num
 		bbr -> sk.delivered_mstamp = bbr -> sk.tcp_mstamp;
     }
 
-	bbr -> rs.acked_sacked = 1;					/* freshly ACKed or SACKed */
-	bbr -> rs.losses = num_lost;				/* freshly marked lost */
+	bbr -> rs.acked_sacked = newly_delivered;					/* freshly ACKed or SACKed */
+	bbr -> rs.losses = num_lost;								/* freshly marked lost */
 	/* Return an invalid sample if no timing information is available or
 	 * in recovery from loss with SACK reneging. Rate samples taken during
 	 * a SACK reneging event may overestimate bw by including packets that
@@ -164,6 +164,8 @@ void bbr_print_wrapper(BBR* bbr){
 // Create and initialize a new BBR instance.
 BBR* create_bbr(){
 	BBR* bbr = malloc(sizeof(BBR));
+
+	bbr -> to_be_acked = 0;
 	memset(&(bbr -> sk), 0, sizeof(bbr -> sk));
 	init(&(bbr -> seqnum_map));
 
@@ -202,27 +204,44 @@ struct rate_sample create_empty_rate_sample(){
 // / Called each time an ack arrives. `now` and `ack_seq` are enough to compute `rtt` and
 // / `num_lost`. They are provided separately for convenience. `loss` denotes the number of
 // / packets that were lost.
-void on_ack(BBR* bbr, u64 now, u64 seqnum, u64 rtt, u64 num_lost){
-    cwnd_event(bbr, CA_EVENT_FAST_ACK);
+void on_ack(BBR* bbr, u64 now, u64 cum_ack, u64 rtt, u64 num_lost){
 
-	u64 newly_delivered = 1;
+	
+	u64 newly_delivered = cum_ack - (bbr -> to_be_acked);
 	u64 in_flight = bbr -> seqnum_map.size;
+	
+	if(num_lost > 0){
 
-    bbr -> sk.delivered = seqnum;
-	bbr -> sk.tcp_mstamp = now;
-	bbr -> sk.delivered_mstamp = now;
-	bbr -> sk.sacked_out = seqnum;
-	bbr -> sk.lost_out += num_lost;
+		printf("%lld packets lost!", num_lost);
+		bbr -> rs = create_empty_rate_sample();
+		bbr_set_state(&(bbr -> sk), TCP_CA_Loss);
 
-	bbr -> rs = create_empty_rate_sample();
+		tcp_rate_gen(bbr, newly_delivered, in_flight, rtt, num_lost);
+		bbr_main(&(bbr -> sk), &(bbr -> rs));
+		return;
+	}
 
-	u64 now_ns = now * NSEC_PER_USEC;
-	tcp_rate_skb_delivered(bbr, now_ns, seqnum);
-	tcp_rate_gen(bbr, newly_delivered, in_flight, rtt, num_lost);
+	for(u64 seqnum = (bbr -> to_be_acked); seqnum < cum_ack; ++seqnum){
+		cwnd_event(bbr, CA_EVENT_FAST_ACK);
 
-	bbr_main(&(bbr -> sk), &(bbr -> rs));
+		bbr -> sk.delivered = seqnum;
+		bbr -> sk.tcp_mstamp = now;
+		bbr -> sk.delivered_mstamp = now;
+		bbr -> sk.sacked_out = seqnum;
+		bbr -> sk.lost_out += num_lost;
 
-	delete(&(bbr -> seqnum_map), seqnum);
+		bbr -> rs = create_empty_rate_sample();
+
+		u64 now_ns = now * NSEC_PER_USEC;
+		tcp_rate_skb_delivered(bbr, now_ns, seqnum);
+		tcp_rate_gen(bbr, newly_delivered, in_flight, rtt, num_lost);
+
+		bbr_main(&(bbr -> sk), &(bbr -> rs));
+
+		delete(&(bbr -> seqnum_map), seqnum);
+	}
+
+	bbr -> to_be_acked = cum_ack;
 }
 
 

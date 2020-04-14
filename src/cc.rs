@@ -175,7 +175,6 @@ impl CongestionControl for Instant {
 pub struct BBR_Wrapper{
     bbr_ptr: *mut BBR,
     init_time_us: u64,
-    to_be_acked: u64,
 }
 
 impl Default for BBR_Wrapper {
@@ -184,7 +183,6 @@ impl Default for BBR_Wrapper {
             BBR_Wrapper{
                 bbr_ptr: create_bbr(),
                 init_time_us: 1000,
-                to_be_acked: std::u64::MAX,
             }
         }
     }
@@ -194,22 +192,10 @@ impl CongestionControl for BBR_Wrapper {
     fn on_ack(&mut self, _now: Time, cum_ack: SeqNum, _ack_uid: PktId, rtt: Time, num_lost: u64) {
         println!("Entering on_ack() with cum_ack = {}.", cum_ack);
         unsafe {
-            if self.to_be_acked != cum_ack {
-                // bbr_print_wrapper(self.bbr_ptr);
-            }
-            
-            for seq_num in self.to_be_acked .. cum_ack {
-                // println!("Received ACK for {}.", seq_num);
-                on_ack(self.bbr_ptr, self.init_time_us + _now.micros(), seq_num, rtt.micros(), num_lost);
-            }
-
-            self.to_be_acked = cum_ack;
-            
-            if num_lost > 0 {
-                self.on_timeout();
-            }
+            bbr_print_wrapper(self.bbr_ptr);
+            on_ack(self.bbr_ptr, self.init_time_us + _now.micros(), cum_ack, rtt.micros(), num_lost);
         }
-        println!("Exiting on_ack with cum_ack = {}.", cum_ack);
+        println!("Exiting on_ack() with cum_ack = {}.\n", cum_ack);
     }
 
     fn on_send(&mut self, _now: Time, seq_num: SeqNum, _uid: PktId) {
@@ -220,7 +206,7 @@ impl CongestionControl for BBR_Wrapper {
             on_send(self.bbr_ptr, self.init_time_us + _now.micros(), seq_num);
         }
         // println!("SENT!");
-        println!("Exiting on_send() with seq_num = {}.", seq_num);
+        println!("Exiting on_send() with seq_num = {}.\n", seq_num);
     }
 
     fn on_timeout(&mut self) {
