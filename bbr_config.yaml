@@ -21,5 +21,6 @@ topo:
         Const: 50000
       cc: BBR
       start_time: 0
-      tx_length: Infinite
+      tx_length:
+        Bytes: 15000000
 random_seed: 0
