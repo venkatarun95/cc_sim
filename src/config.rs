@@ -38,7 +38,9 @@ pub enum LinkTraceConfig {
 #[allow(dead_code)]
 pub enum CCConfig {
     AIMD,
-    Instant,
+    InstantCC,
+    OscInstantCC { k: f64, omega: f64 },
+    StableLinearCC { alpha: f64, k: f64 },
 }
 
 /// Delay applied to packets.

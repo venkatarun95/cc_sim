@@ -1,11 +1,11 @@
 use crate::base::*;
 use crate::cc;
-use crate::config::{CCConfig, Config};
+use crate::config::{CCConfig, Config, DelayConfig};
 use crate::simulator::*;
 use crate::tracer::Tracer;
 use crate::transport::*;
 
-use failure::Error;
+use failure::{Error, format_err};
 
 /// Creates topology specified in Config and returns a Scheduler (with appropriate NetObjects). The
 /// base topology is as follows (tcp_sender -> delay) -> link -> router --..--> ackers --> back to
@@ -35,7 +35,15 @@ pub fn create_topology<'a>(config: &'a Config, tracer: &'a Tracer) -> Result<Sch
             // Create congestion control
             let ccalg: Box<dyn CongestionControl> = match group_config.cc {
                 CCConfig::AIMD => Box::new(cc::AIMD::default()),
-                CCConfig::Instant => Box::new(cc::Instant::default()),
+                CCConfig::InstantCC => Box::new(cc::InstantCC::default()),
+                CCConfig::OscInstantCC { k, omega } => Box::new(cc::OscInstantCC::new(k, omega)),
+                CCConfig::StableLinearCC { alpha, k } => {
+                    if let DelayConfig::Const(delay) = group_config.delay {
+                        Box::new(cc::StableLinearCC::new(alpha, k, delay))
+                    } else {
+                        return Err(format_err!("StableLinearCC only works with DelayConfig::Const, since propagation delay needs to be known"));
+                    }
+                }
             };
 
             // Decide everybody's ids
