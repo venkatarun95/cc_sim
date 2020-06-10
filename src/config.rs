@@ -118,6 +118,12 @@ pub struct ConfigLog {
     pub timeouts: LogType,
     /// Packet ingress/egress rates and transmission opportunities from links
     pub link_rates: LogType,
+    /// If specified, stats will be collected for these intervals. If end time is not specified,
+    /// end of the simulation is used. E.g. to collect stats for the entire duration, specify `(0,
+    /// None)`.
+    pub stats_intervals: Vec<(Time, Option<Time>)>,
+    /// If specified, stats are output to this file. Else, they are output to stdout
+    pub stats_file: Option<String>,
     /// Bucket size for plotting link stats
     pub link_bucket_size: Time,
 }

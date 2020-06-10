@@ -85,6 +85,8 @@ fn main() -> Result<(), Error> {
                     sender_losses: LogType::Ignore,
                     timeouts: LogType::Ignore,
                     link_rates: LogType::Plot,
+                    stats_intervals: vec![(Time::from_secs(0), None)],
+                    stats_file: None,
                     link_bucket_size: Time::from_millis(200),
                 },
                 random_seed: 0,
@@ -94,15 +96,13 @@ fn main() -> Result<(), Error> {
         return Ok(());
     };
 
-    println!("Config: {}", serde_yaml::to_string(&config)?);
-
     seed(config.random_seed);
     let tracer = Tracer::new(&config);
     let mut sched = create_topology(&config, &tracer)?;
 
     sched.simulate(config.sim_dur)?;
 
-    tracer.finalize();
+    tracer.finalize()?;
 
     Ok(())
 }

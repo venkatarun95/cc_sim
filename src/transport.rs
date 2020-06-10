@@ -574,6 +574,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
                 self.rto.report_fresh_ack();
             }
 
+            self.tracer.log(obj_id, now, TraceElem::TcpSenderCumAcked(cum_ack - received_till));
             self.tracer
                 .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
             self.tracer.log(obj_id, now, TraceElem::TcpSenderRtt(rtt));

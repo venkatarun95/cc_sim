@@ -4,6 +4,8 @@ use crate::config::Config;
 use crate::simulator::*;
 
 use gnuplot::AxesCommon;
+use histogram::Histogram;
+use serde::Serialize;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -12,6 +14,9 @@ use std::default::Default;
 /// One 'row' of a trace. Multiple objects can
 /// log simultaneously: uses interior mutability to enable this
 pub enum TraceElem {
+    /// Number of packets that have been cumulatively acked now . Non consecutively acked packets
+    /// aren't included (so it only indicates packets delivered to the application)
+    TcpSenderCumAcked(u64),
     TcpSenderCwnd(u64),
     TcpSenderRtt(Time),
     /// The number of lost packets, _when_ loss was detected. This happens when sequence numbers
@@ -31,6 +36,7 @@ impl TraceElem {
     /// Whether this trace element is about a link
     fn about_link(&self) -> bool {
         match self {
+            Self::TcpSenderCumAcked(_) => false,
             Self::TcpSenderCwnd(_) => false,
             Self::TcpSenderRtt(_) => false,
             Self::TcpSenderLoss(_) => false,
@@ -38,6 +44,20 @@ impl TraceElem {
             Self::LinkTxOpportunity => true,
             Self::LinkIngress(_, _) => true,
             Self::LinkEgress(_) => true,
+        }
+    }
+
+    /// Whether the trace element is about a sender
+    fn about_sender(&self) -> bool {
+        match self {
+            Self::TcpSenderCumAcked(_) => true,
+            Self::TcpSenderCwnd(_) => true,
+            Self::TcpSenderRtt(_) => true,
+            Self::TcpSenderLoss(_) => true,
+            Self::TcpSenderTimeout => true,
+            Self::LinkTxOpportunity => false,
+            Self::LinkIngress(_, _) => false,
+            Self::LinkEgress(_) => false,
         }
     }
 }
@@ -66,6 +86,122 @@ impl LinkBucket {
     }
 }
 
+/// Per-flow statistics about a period of time
+struct SenderStats {
+    /// The configured time for which we are collecting statistics. If ending time is `None`, it is
+    /// infinity
+    config_period: (Time, Option<Time>),
+    /// Time period for which we are collecting statistics. This is the time between the first and
+    /// last event reported by the sender in the time period specified in the config}
+    pkt_period: Option<(Time, Time)>,
+    num_cum_acked: u64,
+    num_lost: u64,
+    num_timeouts: u64,
+    rtt: Histogram,
+    cwnd: Histogram,
+}
+
+/// The data we serialize from `histogram::Histogram`
+#[derive(Serialize)]
+struct HistSerialize {
+    mean: u64,
+    stddev: u64,
+    p0: u64,
+    p25: u64,
+    p50: u64,
+    p95: u64,
+    p99: u64,
+    p100: u64,
+}
+
+/// The data we serialize from `SenderStats`
+#[derive(Serialize)]
+struct SenderStatsSerialize {
+    config_period: (Time, Option<Time>),
+    pkt_period: (Time, Time),
+    num_cum_acked: u64,
+    num_lost: u64,
+    num_timeouts: u64,
+    rtt: Option<HistSerialize>,
+    cwnd: Option<HistSerialize>,
+}
+
+impl SenderStats {
+    fn new(config_period: (Time, Option<Time>)) -> Self {
+        Self {
+            config_period,
+            pkt_period: None,
+            num_cum_acked: 0,
+            num_lost: 0,
+            num_timeouts: 0,
+            rtt: Histogram::new(),
+            cwnd: Histogram::new(),
+        }
+    }
+
+    /// Register a new trace element. If `now` is out of range, this value is ignored
+    fn log(&mut self, now: Time, elem: &TraceElem) {
+        // If this isn't about a sender, we aren't interested
+        if !elem.about_sender() {
+            return;
+        }
+        // See if time is within range
+        if now < self.config_period.0 || now >= self.config_period.1.unwrap_or(Time::MAX) {
+            return;
+        }
+        // Update self.pkt_period if needed
+        if let Some((_, ref mut end)) = self.pkt_period {
+            assert!(*end <= now);
+            *end = now;
+        } else {
+            self.pkt_period = Some((now, now))
+        }
+
+        match elem {
+            TraceElem::TcpSenderCumAcked(num_cum_acked) => self.num_cum_acked += num_cum_acked,
+            TraceElem::TcpSenderCwnd(cwnd) => self.cwnd.increment(*cwnd).unwrap(),
+            TraceElem::TcpSenderRtt(rtt) => self.rtt.increment(rtt.micros()).unwrap(),
+            TraceElem::TcpSenderLoss(num_lost) => self.num_lost += num_lost,
+            TraceElem::TcpSenderTimeout => self.num_timeouts += 1,
+            TraceElem::LinkTxOpportunity => {}
+            TraceElem::LinkIngress(_, _) => {}
+            TraceElem::LinkEgress(_) => {}
+        }
+    }
+
+    fn to_serializable(&self) -> Option<SenderStatsSerialize> {
+        fn hist_to_json(hist: &Histogram) -> Option<HistSerialize> {
+            if hist.entries() == 0 {
+                None
+            } else {
+                Some(HistSerialize {
+                    mean: hist.mean().unwrap(),
+                    stddev: hist.stddev().unwrap(),
+                    p0: hist.percentile(0.).unwrap(),
+                    p25: hist.percentile(25.).unwrap(),
+                    p50: hist.percentile(50.).unwrap(),
+                    p95: hist.percentile(95.).unwrap(),
+                    p99: hist.percentile(99.).unwrap(),
+                    p100: hist.percentile(100.).unwrap(),
+                })
+            }
+        }
+        if let Some(pkt_period) = self.pkt_period {
+            Some(SenderStatsSerialize {
+                config_period: self.config_period,
+                pkt_period,
+                num_cum_acked: self.num_cum_acked,
+                num_lost: self.num_lost,
+                num_timeouts: self.num_timeouts,
+                rtt: hist_to_json(&self.rtt),
+                cwnd: hist_to_json(&self.cwnd),
+            })
+        } else {
+            None
+        }
+    }
+}
+
 pub struct Tracer<'a> {
     config: &'a Config,
     /// Drain to pass values to
@@ -74,6 +210,7 @@ pub struct Tracer<'a> {
     losses: RefCell<HashMap<NetObjId, Vec<(Time, u64)>>>,
     timeouts: RefCell<HashMap<NetObjId, Vec<Time>>>,
     link_stats: RefCell<HashMap<NetObjId, Vec<LinkBucket>>>,
+    sender_stats: RefCell<HashMap<NetObjId, Vec<SenderStats>>>,
 }
 
 impl<'a> Tracer<'a> {
@@ -85,10 +222,11 @@ impl<'a> Tracer<'a> {
             losses: Default::default(),
             timeouts: Default::default(),
             link_stats: Default::default(),
+            sender_stats: Default::default(),
         }
     }
 
-    /// Log this event. Will take action according to the confifuration. NOTE: Logging to file is
+    /// Log this event. Will take action according to the configuration. NOTE: Logging to file is
     /// not yet implemented
     pub fn log(&self, from: NetObjId, now: Time, elem: TraceElem) {
         // Helper function to insert value the vector of a hashmap
@@ -127,6 +265,7 @@ impl<'a> Tracer<'a> {
         };
 
         match elem {
+            TraceElem::TcpSenderCumAcked(_) => {}
             TraceElem::TcpSenderCwnd(cwnd) => {
                 if self.config.log.cwnd.plot() {
                     insert(from, (now, cwnd), &self.cwnds)
@@ -174,10 +313,25 @@ impl<'a> Tracer<'a> {
                 }
             }
         }
+
+        // Insert data in sender_stats
+        if !self.sender_stats.borrow().contains_key(&from) {
+            let stats = self
+                .config
+                .log
+                .stats_intervals
+                .iter()
+                .map(|interval| SenderStats::new(*interval))
+                .collect();
+            self.sender_stats.borrow_mut().insert(from, stats);
+        }
+        for interval_stats in self.sender_stats.borrow_mut().get_mut(&from).unwrap() {
+            interval_stats.log(now, &elem);
+        }
     }
 
     /// Should be called at end of simulation, so it can finish plotting/logging
-    pub fn finalize(&self) {
+    pub fn finalize(&self) -> Result<(), failure::Error> {
         if self.config.log.cwnd.plot() {
             let mut fig = gnuplot::Figure::new();
             fig.set_terminal(
@@ -290,5 +444,32 @@ impl<'a> Tracer<'a> {
                 fig.close();
             }
         }
+
+        // Output sender statistics
+        // The object we'll finally serialize
+        let mut stats_ser = HashMap::<NetObjId, Vec<SenderStatsSerialize>>::new();
+        for (from, stats_intervals) in self.sender_stats.borrow().iter() {
+            let stats_intervals_ser: Vec<_> = stats_intervals
+                .iter()
+                .map(|s| s.to_serializable())
+                .filter(|s| s.is_some())
+                .map(|s| s.unwrap())
+                .collect();
+            if stats_intervals_ser.len() > 0 {
+                stats_ser.insert(*from, stats_intervals_ser);
+            }
+        }
+
+        // Output wherever we are asked to
+        if let Some(ref fname) = self.config.log.stats_file {
+            let writer = std::io::BufWriter::new(std::fs::File::create(fname)?);
+            serde_json::to_writer(writer, &stats_ser)?;
+        } else {
+            let stdout = std::io::stdout();
+            let writer = stdout.lock();
+            serde_json::to_writer(writer, &stats_ser)?;
+        };
+
+        Ok(())
     }
 }
