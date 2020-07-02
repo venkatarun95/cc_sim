@@ -210,7 +210,10 @@ pub struct Tracer<'a> {
     losses: RefCell<HashMap<NetObjId, Vec<(Time, u64)>>>,
     timeouts: RefCell<HashMap<NetObjId, Vec<Time>>>,
     link_stats: RefCell<HashMap<NetObjId, Vec<LinkBucket>>>,
+    /// Statistics about the senders in time intervals defined by ConfigLog::stats_intervals
     sender_stats: RefCell<HashMap<NetObjId, Vec<SenderStats>>>,
+    /// Number of transmission opportunities in time intervals defined by ConfigLog::stats_intervals
+    link_tx_ops: RefCell<HashMap<NetObjId, Vec<u64>>>
 }
 
 impl<'a> Tracer<'a> {
@@ -223,6 +226,7 @@ impl<'a> Tracer<'a> {
             timeouts: Default::default(),
             link_stats: Default::default(),
             sender_stats: Default::default(),
+            link_tx_ops: Default::default(),
         }
     }
 
@@ -327,6 +331,24 @@ impl<'a> Tracer<'a> {
         }
         for interval_stats in self.sender_stats.borrow_mut().get_mut(&from).unwrap() {
             interval_stats.log(now, &elem);
+        }
+
+        // If this is a transmission opportunity, keep track of the number of transmission
+        // opportunities in the intervals given by ConfigLog::stats_intervals
+        if let TraceElem::LinkTxOpportunity = elem {
+            // Add fields for a new link if necessary
+            if !self.link_tx_ops.borrow().contains_key(&from) {
+                self.link_tx_ops.borrow_mut().insert(
+                    from,
+                    vec![0; self.config.log.stats_intervals.len()]
+                );
+            }
+            // Increment the necessary counters for that link
+            for (i, interval) in self.config.log.stats_intervals.iter().enumerate() {
+                if now > interval.0 && now < interval.1.unwrap_or(Time::MAX) {
+                    self.link_tx_ops.borrow_mut().get_mut(&from).unwrap()[i] += 1;
+                }
+            }
         }
     }
 
@@ -446,8 +468,8 @@ impl<'a> Tracer<'a> {
         }
 
         // Output sender statistics
-        // The object we'll finally serialize
-        let mut stats_ser = HashMap::<NetObjId, Vec<SenderStatsSerialize>>::new();
+        // The sender object we'll finally serialize
+        let mut sender_stats_ser = HashMap::<NetObjId, Vec<SenderStatsSerialize>>::new();
         for (from, stats_intervals) in self.sender_stats.borrow().iter() {
             let stats_intervals_ser: Vec<_> = stats_intervals
                 .iter()
@@ -456,9 +478,20 @@ impl<'a> Tracer<'a> {
                 .map(|s| s.unwrap())
                 .collect();
             if stats_intervals_ser.len() > 0 {
-                stats_ser.insert(*from, stats_intervals_ser);
+                sender_stats_ser.insert(*from, stats_intervals_ser);
             }
         }
+
+        // The object we finally serialize, containing both sender and link information
+        #[derive(Serialize)]
+        struct LinkTraceSerialize {
+            link_tx_ops: HashMap<NetObjId, Vec<u64>>,
+            sender_stats: HashMap<NetObjId, Vec<SenderStatsSerialize>>,
+        }
+        let stats_ser = LinkTraceSerialize {
+            link_tx_ops: self.link_tx_ops.borrow().clone(),
+            sender_stats: sender_stats_ser,
+        };
 
         // Output wherever we are asked to
         if let Some(ref fname) = self.config.log.stats_file {
