@@ -58,7 +58,10 @@ pub struct SenderGroupConfig {
     /// Number of senders in this group
     pub num_senders: usize,
     /// Packets in this group experience this much fixed delay
-    pub delay: DelayConfig,
+    pub delay: Time,
+    /// Packets will be aggregated with this inter-send time (in microseconds). Set to Const(0.) if
+    /// no aggregation is desired
+    pub agg_intersend: RandomVariable,
     /// They use this congestion control algorithm
     pub cc: CCConfig,
     /// When should the senders start transmit?

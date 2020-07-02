@@ -1,4 +1,4 @@
-use crate::config::{Config, DelayConfig, LinkTraceConfig};
+use crate::config::{Config, LinkTraceConfig};
 use crate::random::RandomVariable;
 use crate::simulator::*;
 use crate::tracer::{TraceElem, Tracer};
@@ -86,12 +86,9 @@ pub enum LinkTrace<'c> {
     /// A constant link rate in bytes per second
     #[allow(dead_code)]
     Const { rate: f64, config: &'c Config },
-    /// Link rate (in bytes per second) sampled from the given distribution.
+    /// Inter-send time (in microseconds) is sampled from the given distribution.
     #[allow(dead_code)]
-    Random {
-        rate: RandomVariable,
-        config: &'c Config,
-    },
+    Random { intersend: RandomVariable },
     /// A piecewise-constant link rate. Give the rate and duration for which it applies in bytes
     /// per second. Loops after it reaches the end.
     #[allow(dead_code)]
@@ -117,8 +114,8 @@ impl<'c> LinkTrace<'c> {
 
     // New link with link rate following a random distirbution.
     #[allow(dead_code)]
-    pub fn new_random(rate: RandomVariable, config: &'c Config) -> Self {
-        Self::Random { rate, config }
+    pub fn new_random(intersend: RandomVariable) -> Self {
+        Self::Random { intersend }
     }
 
     /// A piecewise constant link rate trace. Give a list of rates along with how long they should
@@ -163,7 +160,7 @@ impl<'c> LinkTrace<'c> {
     pub fn from_config(link_config: &LinkTraceConfig, config: &'c Config) -> Result<Self, Error> {
         Ok(match link_config {
             LinkTraceConfig::Const(rate) => Self::new_const(*rate, config),
-            LinkTraceConfig::Random(rate) => Self::new_random(*rate, config),
+            LinkTraceConfig::Random(rate) => Self::new_random(*rate),
             LinkTraceConfig::Piecewise(rates) => Self::new_piecewise(rates, config),
             LinkTraceConfig::MahimahiFile(fname) => Self::new_mahimahi_from_file(Path::new(fname))?,
         })
@@ -176,10 +173,7 @@ impl<'c> LinkTrace<'c> {
             Self::Const { rate, config } => Time::from_micros(
                 (now.micros() as f64 + (1_000_000. * config.pkt_size as f64 / *rate)) as u64,
             ),
-            Self::Random { rate, config } => Time::from_micros(
-                (now.micros() as f64 + (1_000_000. * config.pkt_size as f64 / (rate.sample())))
-                    as u64,
-            ),
+            Self::Random { intersend } => now + Time::from_micros(intersend.sample() as u64),
             Self::Piecewise {
                 rates,
                 cur_id,
@@ -315,13 +309,13 @@ impl<'a> NetObj for Link<'a> {
 /// Delays packets by some amount.
 pub struct Delay {
     /// The delay by which packets are delayed (either constant or random)
-    pub delay: DelayConfig,
+    delay: Time,
     /// The next hop
     next: NetObjId,
 }
 
 impl Delay {
-    pub fn new(delay: DelayConfig, next: NetObjId) -> Self {
+    pub fn new(delay: Time, next: NetObjId) -> Self {
         Self { delay, next }
     }
 }
@@ -342,16 +336,88 @@ impl NetObj for Delay {
         now: Time,
         pkt: Rc<Packet>,
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
-        let deque_time = match self.delay {
-            DelayConfig::RandomMicros(mut time_us) => {
-                now + Time::from_micros(time_us.sample() as u64)
-            }
-            DelayConfig::RandomMillis(mut time_ms) => {
-                now + Time::from_millis(time_ms.sample() as u64)
-            }
-            DelayConfig::Const(time) => now + time,
-        };
+        let deque_time =  now + self.delay;
         Ok(vec![(deque_time, self.next, Action::Push(pkt))])
+    }
+
+    fn event(
+        &mut self,
+        _: NetObjId,
+        _: NetObjId,
+        _: Time,
+        _: u64,
+    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
+        Ok(Vec::new())
+    }
+}
+
+pub struct Aggregator {
+    /// Time between send intervals. Unlike a link which limits the number of packets packets per
+    /// second, `Aggregator` operates at infinite capacity since it can send an arbitrary number of
+    /// packets at every opportunity
+    intersend: RandomVariable,
+    /// The next transmit opportunity
+    next_opp: Time,
+    /// The next hop
+    next: NetObjId,
+}
+
+impl Aggregator {
+    /// Intersend is the time between send intervals (in microseconds). Unlike a link which limits
+    /// the number of packets packets per second, `Aggregator` operates at infinite capacity since it
+    /// can send an arbitrary number of packets at every opportunity
+    pub fn new(intersend: RandomVariable, next: NetObjId) -> Self {
+        Self {
+            intersend,
+            next_opp: Time::ZERO,
+            next,
+        }
+    }
+}
+
+impl NetObj for Aggregator {
+fn init(
+        &mut self,
+        _obj_id: NetObjId,
+        _now: Time,
+    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
+        Ok(Vec::new())
+    }
+
+    fn push(
+        &mut self,
+        _obj_id: NetObjId,
+        _from: NetObjId,
+        now: Time,
+        pkt: Rc<Packet>,
+    ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
+        while self.next_opp <= now {
+            // Special case: means we don't want any aggregation at all. If we don't handle this
+            // separately, `cnt` will reach 10 and produce an error
+            if self.intersend == RandomVariable::Const(0.) {
+                self.next_opp = now;
+                break;
+            } else {
+                let mut cnt = 0;
+                // Get the intersend time from the random variable
+                let mut intersend;
+                loop {
+                    intersend = self.intersend.sample();
+                    if intersend > 0. { break; }
+                    if intersend < 0. {
+                        return Err(format_err!("'intersend' time was negative. Must be positive"))
+                    }
+                    // If it returns 0 too many times, we should throw an error and exit
+                    cnt += 1;
+                    if cnt > 10 {
+                        return Err(format_err!("'intersend' provided to Aggregator returned 0 too many times. Intersend time must be positive or Const(0)"));
+                    }
+                }
+                self.next_opp = self.next_opp + Time::from_micros(intersend as u64);
+            }
+        }
+        // Simulator will preserve order. Events that are registered later will be acted on later
+        Ok(vec![(self.next_opp, self.next, Action::Push(pkt))])
     }
 
     fn event(

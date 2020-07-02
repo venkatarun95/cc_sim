@@ -1,11 +1,11 @@
 use crate::base::*;
 use crate::cc;
-use crate::config::{CCConfig, Config, DelayConfig};
+use crate::config::{CCConfig, Config};
 use crate::simulator::*;
 use crate::tracer::Tracer;
 use crate::transport::*;
 
-use failure::{Error, format_err};
+use failure::Error;
 
 /// Creates topology specified in Config and returns a Scheduler (with appropriate NetObjects). The
 /// base topology is as follows (tcp_sender -> delay) -> link -> router --..--> ackers --> back to
@@ -38,18 +38,16 @@ pub fn create_topology<'a>(config: &'a Config, tracer: &'a Tracer) -> Result<Sch
                 CCConfig::InstantCC => Box::new(cc::InstantCC::default()),
                 CCConfig::OscInstantCC { k, omega } => Box::new(cc::OscInstantCC::new(k, omega)),
                 CCConfig::StableLinearCC { alpha, k } => {
-                    if let DelayConfig::Const(delay) = group_config.delay {
-                        Box::new(cc::StableLinearCC::new(alpha, k, delay))
-                    } else {
-                        return Err(format_err!("StableLinearCC only works with DelayConfig::Const, since propagation delay needs to be known"));
-                    }
+                    Box::new(cc::StableLinearCC::new(alpha, k, group_config.delay))
                 }
+                CCConfig::IncreaseBdpCC => Box::new(cc::IncreaseBdpCC::default()),
             };
 
             // Decide everybody's ids
             let tcp_sender_id = router_id + 1 + objs_to_reg.len();
             let delay_id = tcp_sender_id + 1;
-            let acker_id = delay_id + 1;
+            let agg_id = delay_id + 1;
+            let acker_id = agg_id + 1;
 
             let acker_addr = sched.next_addr();
 
@@ -65,7 +63,8 @@ pub fn create_topology<'a>(config: &'a Config, tracer: &'a Tracer) -> Result<Sch
                 &tracer,
                 config,
             );
-            let delay = Delay::new(group_config.delay, link_id);
+            let delay = Delay::new(group_config.delay, agg_id);
+            let aggregator = Aggregator::new(group_config.agg_intersend, link_id);
 
             // Create the acker
             let acker = Acker::new(acker_addr, tcp_sender_id);
@@ -76,6 +75,7 @@ pub fn create_topology<'a>(config: &'a Config, tracer: &'a Tracer) -> Result<Sch
 
             objs_to_reg.push(Box::new(tcp_sender));
             objs_to_reg.push(Box::new(delay));
+            objs_to_reg.push(Box::new(aggregator));
             objs_to_reg.push(Box::new(acker));
         }
     }

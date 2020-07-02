@@ -1,0 +1,45 @@
+{
+  "pkt_size": 1500,
+  "sim_dur": 100000000,
+  "log": {
+    "out_terminal": "png",
+    "out_file": "test.png",
+    "cwnd": "Plot",
+    "rtt": "Plot",
+    "sender_losses": "Plot",
+    "timeouts": "Plot",
+    "link_rates": "Plot",
+    "stats_intervals": [[0, null]],
+    "stats_file": null,
+    "link_bucket_size": 100000
+  },
+  "topo": {
+    "link": {
+      "Const": 1500000
+    },
+    "bufsize": "Infinite",
+    "sender_groups": [
+      {
+        "num_senders": 1,
+        "delay": 50000,
+        "agg_intersend": {
+          "Const": 10000
+        },
+        "cc": "IncreaseBdpCC",
+        "start_time": 0,
+        "tx_length": "Infinite"
+      },
+      {
+        "num_senders": 1,
+        "delay": 100000,
+        "agg_intersend": {
+          "Const": 0
+        },
+        "cc": "IncreaseBdpCC",
+        "start_time": 0,
+        "tx_length": "Infinite"
+      }
+    ]
+  },
+  "random_seed": 0
+}

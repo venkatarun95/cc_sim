@@ -9,7 +9,7 @@ mod transport;
 
 // Internal dependencies.
 use config::{
-    CCConfig, Config, ConfigLog, ConfigTopo, DelayConfig, LinkTraceConfig, LogType,
+    CCConfig, Config, ConfigLog, ConfigTopo, LinkTraceConfig, LogType,
     SenderGroupConfig,
 };
 use random::seed;
@@ -61,7 +61,8 @@ fn main() -> Result<(), Error> {
             for i in 0..2 {
                 sender_groups.push(SenderGroupConfig {
                     num_senders: 1,
-                    delay: DelayConfig::Const(Time::from_millis(10)),
+                    delay: Time::from_millis(10),
+                    agg_intersend: random::RandomVariable::Const(0.),
                     cc: _stable_linear_cc_config.clone(),
                     start_time: Time::from_secs(i * 10),
                     tx_length: TcpSenderTxLength::Duration(Time::from_secs(100 - i * 20)),
