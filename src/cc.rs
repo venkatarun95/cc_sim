@@ -407,3 +407,77 @@ impl CongestionControl for StableLinearCC {
         Time::ZERO
     }
 }
+
+/// A congestion control that estimates the BDP and transmits above the BDP
+pub struct IncreaseBdpCC {
+    /// Estimate of the propagation delay
+    min_rtt: Time,
+    /// Latest BDP estimate
+    bdp: f64,
+    /// Sequence number and send time of marker packet
+    marker_pkt: Option<(SeqNum, Time)>,
+    /// Num packets acked since the marker pkt
+    num_acks_since_marker: u64,
+    /// Sequence number and time of the last sent packet (only if it wasn't a retransmission)
+    last_sent: Option<(SeqNum, Time)>,
+}
+
+impl Default for IncreaseBdpCC {
+    fn default() -> Self {
+        Self {
+            min_rtt: Time::MAX,
+            bdp: 1.,
+            marker_pkt: None,
+            num_acks_since_marker: 0,
+            last_sent: None,
+        }
+    }
+}
+
+impl CongestionControl for IncreaseBdpCC {
+    fn on_ack(&mut self, now: Time, cum_ack: SeqNum, _ack_uid: PktId, rtt: Time, _num_lost: u64) {
+        self.num_acks_since_marker += 1;
+
+        if rtt < self.min_rtt {
+            self.min_rtt = rtt;
+        }
+
+        let cwnd = self.get_cwnd();
+        if let Some((seq_num, sent_time)) = self.marker_pkt {
+            if cum_ack > seq_num {
+                // Calculate BDP
+                self.bdp = self.num_acks_since_marker as f64 * self.min_rtt.secs() / (now - sent_time).secs();
+                println!("{} rtt {} min_rtt {} cwnd {}", self.bdp, now - sent_time, self.min_rtt, cwnd);
+                self.marker_pkt = self.last_sent;
+                self.num_acks_since_marker = 0;
+            }
+        } else {
+            // We shouldn't get an ack before any packet is sent!
+            unreachable!();
+        }
+    }
+
+    fn on_send(&mut self, now: Time, seq_num: SeqNum, _uid: PktId) {
+        if let Some((last_seq_num, _)) = self.last_sent {
+            if seq_num > last_seq_num {
+                self.last_sent = Some((seq_num, now));
+            }
+        } else {
+            self.last_sent = Some((seq_num, now));
+            // Get the marker started
+            self.marker_pkt = self.last_sent;
+        }
+    }
+
+    fn on_timeout(&mut self) {}
+
+    fn get_cwnd(&mut self) -> u64 {
+        //max(1, (2. * self.bdp + self.bdp.sqrt() + 1.).round() as u64)
+        max(1, self.bdp.round() as u64) + 2
+    }
+
+    fn get_intersend_time(&mut self) -> Time {
+        //Time::from_micros((0.5 * self.min_rtt.micros() as f64 / self.get_cwnd() as f64) as u64)
+        Time::ZERO
+    }
+}

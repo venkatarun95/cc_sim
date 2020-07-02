@@ -41,15 +41,7 @@ pub enum CCConfig {
     InstantCC,
     OscInstantCC { k: f64, omega: f64 },
     StableLinearCC { alpha: f64, k: f64 },
-}
-
-/// Delay applied to packets.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub enum DelayConfig {
-    Const(Time),
-    RandomMicros(RandomVariable),
-    RandomMillis(RandomVariable),
+    IncreaseBdpCC,
 }
 
 /// A group of senders
