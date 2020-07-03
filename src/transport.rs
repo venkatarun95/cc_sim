@@ -4,9 +4,9 @@ use crate::tracer::{TraceElem, Tracer};
 
 use failure::Error;
 
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::rc::Rc;
-use serde::{Deserialize, Serialize};
 
 pub trait CongestionControl {
     /// Called each time an ack arrives. `loss` denotes the number of in-flight packets that are
@@ -260,13 +260,15 @@ impl TrackRxPackets {
         let mut sack = Vec::new();
         let mut block_start = None;
         for i in 0..self.status.len() {
+            // Start from the end so we ack the latest packets first
+            let i = self.status.len() - 1 - i;
             if sack.len() == max_blocks {
                 break;
             }
             if let Some(start) = block_start {
                 // End the block?
                 if self.status[i] != PktStatus::Received {
-                    sack.push((start as SeqNum, i as SeqNum));
+                    sack.push((i as SeqNum, start as SeqNum));
                     block_start = None;
                 }
             } else {
@@ -279,6 +281,9 @@ impl TrackRxPackets {
         if let Some(block_start) = block_start {
             sack.push((block_start as SeqNum, self.status.len() as SeqNum));
         }
+
+        // We constructed the SACK in reverse. So reverse it again
+        sack.reverse();
 
         // Add an offset to sack blocks
         for x in &mut sack {
@@ -331,7 +336,7 @@ impl TcpRto {
 
     /// Must be called when a timeout is triggered, so we can do some backoff
     fn report_timeout(&mut self) {
-        self.backoff *= 2;
+        self.backoff = std::cmp::min(256, 2 * self.backoff);
     }
 
     /// Must be called when a newly transmitted packet is acked, so we may reset the backoff
@@ -470,15 +475,21 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
             ptype: TransportHeader::Data { seq_num },
         };
         self.cc.on_send(now, seq_num, pkt.uid);
-        let event = self.event_uid_map.new_event(TcpSenderEvent::Timeout(now));
         vec![
             (now, self.next, Action::Push(Rc::new(pkt))),
-            (now + self.rto.rto(), obj_id, event),
         ]
     }
 
     /// Schedule a transmission if appropriate
     fn schedule_tx(&mut self, obj_id: NetObjId, now: Time) -> Vec<(Time, NetObjId, Action)> {
+        // Every time this is called we need to schedule a retransmission timeout. This includes
+        // whenever there is an ACK and when we respond to a timeout
+        let rto_event = (
+            now + self.rto.rto(),
+            obj_id,
+            self.event_uid_map.new_event(TcpSenderEvent::Timeout(now))
+        );
+
         // See if we should transmit packets
         if !self.tx_scheduled && !self.sent_all(now) {
             let cwnd = self.cc.get_cwnd();
@@ -495,13 +506,13 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
                     // Schedule a transmission (uid = 0 denotes tx event)
                     time_to_send
                 };
-                let event = self.event_uid_map.new_event(TcpSenderEvent::Transmit);
-                vec![(time_to_send, obj_id, event)]
+                let event_id = self.event_uid_map.new_event(TcpSenderEvent::Transmit);
+                vec![(time_to_send, obj_id, event_id), rto_event]
             } else {
-                Vec::new()
+                vec![rto_event]
             }
         } else {
-            Vec::new()
+            vec![rto_event]
         }
     }
 }
@@ -510,11 +521,16 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
     fn init(
         &mut self,
         obj_id: NetObjId,
-        _now: Time,
+        now: Time,
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
+        // Schedule a transmission and a timeout
         self.tx_scheduled = true;
-        let event = self.event_uid_map.new_event(TcpSenderEvent::Transmit);
-        Ok(vec![(self.start_time, obj_id, event)])
+        let tx_event = self.event_uid_map.new_event(TcpSenderEvent::Transmit);
+        let rto_event = self.event_uid_map.new_event(TcpSenderEvent::Timeout(now));
+        Ok(vec![
+            (self.start_time, obj_id, tx_event),
+            (self.start_time + self.rto.rto(), obj_id, rto_event),
+        ])
     }
 
     fn push(
@@ -574,7 +590,11 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
                 self.rto.report_fresh_ack();
             }
 
-            self.tracer.log(obj_id, now, TraceElem::TcpSenderCumAcked(cum_ack - received_till));
+            self.tracer.log(
+                obj_id,
+                now,
+                TraceElem::TcpSenderCumAcked(cum_ack - received_till),
+            );
             self.tracer
                 .log(obj_id, now, TraceElem::TcpSenderCwnd(self.cc.get_cwnd()));
             self.tracer.log(obj_id, now, TraceElem::TcpSenderRtt(rtt));
@@ -620,7 +640,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
                 Ok(res)
             }
             TcpSenderEvent::Timeout(start_time) => {
-                if self.last_ack_time < start_time {
+                if self.last_ack_time <= start_time {
                     // Mark all inflight packets as lost
                     self.track_rx.mark_all_as_lost();
                     self.rto.report_timeout();
@@ -636,7 +656,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
                     let res = self.schedule_tx(obj_id, now);
                     Ok(res)
                 } else {
-                    // It was acked. All is well
+                    // There was an ack since then. All is well
                     Ok(Vec::new())
                 }
             }
