@@ -6,10 +6,10 @@ use crate::tracer::{TraceElem, Tracer};
 // External dependencies.
 use failure::{format_err, Error};
 use fnv::FnvHashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::Path;
 use std::rc::Rc;
-use serde::{Deserialize, Serialize};
 
 /// A router with configurable routes
 pub struct Router {
@@ -262,7 +262,6 @@ impl<'a> NetObj for Link<'a> {
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
         self.tracer
             .log(obj_id, now, TraceElem::LinkIngress(pkt.src, pkt.size));
-
         if let BufferSize::Finite(size) = self.bufsize {
             if self.buffer.len() >= size {
                 return Ok(Vec::new());
@@ -336,7 +335,7 @@ impl NetObj for Delay {
         now: Time,
         pkt: Rc<Packet>,
     ) -> Result<Vec<(Time, NetObjId, Action)>, Error> {
-        let deque_time =  now + self.delay;
+        let deque_time = now + self.delay;
         Ok(vec![(deque_time, self.next, Action::Push(pkt))])
     }
 
@@ -376,7 +375,7 @@ impl Aggregator {
 }
 
 impl NetObj for Aggregator {
-fn init(
+    fn init(
         &mut self,
         _obj_id: NetObjId,
         _now: Time,
@@ -403,9 +402,13 @@ fn init(
                 let mut intersend;
                 loop {
                     intersend = self.intersend.sample();
-                    if intersend > 0. { break; }
+                    if intersend > 0. {
+                        break;
+                    }
                     if intersend < 0. {
-                        return Err(format_err!("'intersend' time was negative. Must be positive"))
+                        return Err(format_err!(
+                            "'intersend' time was negative. Must be positive"
+                        ));
                     }
                     // If it returns 0 too many times, we should throw an error and exit
                     cnt += 1;

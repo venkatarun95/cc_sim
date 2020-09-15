@@ -1,16 +1,16 @@
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand_distr::{Distribution, Exp};
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use serde::{Serialize, Deserialize};
-use rand_distr::{Exp, Distribution};
 
 thread_local! {
     pub static RNG: RefCell<StdRng> = RefCell::new(SeedableRng::from_seed([0;32]));
 }
 
-pub fn seed(new_seed: u8){
+pub fn seed(new_seed: u8) {
     RNG.with(|rng| {
-        rng.replace(SeedableRng::from_seed([new_seed;32]));
+        rng.replace(SeedableRng::from_seed([new_seed; 32]));
     });
 }
 

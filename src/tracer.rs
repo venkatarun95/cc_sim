@@ -213,7 +213,7 @@ pub struct Tracer<'a> {
     /// Statistics about the senders in time intervals defined by ConfigLog::stats_intervals
     sender_stats: RefCell<HashMap<NetObjId, Vec<SenderStats>>>,
     /// Number of transmission opportunities in time intervals defined by ConfigLog::stats_intervals
-    link_tx_ops: RefCell<HashMap<NetObjId, Vec<u64>>>
+    link_tx_ops: RefCell<HashMap<NetObjId, Vec<u64>>>,
 }
 
 impl<'a> Tracer<'a> {
@@ -338,10 +338,9 @@ impl<'a> Tracer<'a> {
         if let TraceElem::LinkTxOpportunity = elem {
             // Add fields for a new link if necessary
             if !self.link_tx_ops.borrow().contains_key(&from) {
-                self.link_tx_ops.borrow_mut().insert(
-                    from,
-                    vec![0; self.config.log.stats_intervals.len()]
-                );
+                self.link_tx_ops
+                    .borrow_mut()
+                    .insert(from, vec![0; self.config.log.stats_intervals.len()]);
             }
             // Increment the necessary counters for that link
             for (i, interval) in self.config.log.stats_intervals.iter().enumerate() {

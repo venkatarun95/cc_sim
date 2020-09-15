@@ -91,7 +91,7 @@ pub enum TcpSenderTxLength {
 enum PktStatus {
     Received,
     /// Packet hasn't been received. Counts number of dupacks
-    NotReceieved(u64),
+    NotReceived(u64),
     /// Has been marked as lost
     Lost,
     /// Packet has been retransmitted. Counts number of dupacks since retransmission and notes the
@@ -123,6 +123,21 @@ impl TrackRxPackets {
         }
     }
 
+    /// Pretty print the status of each unacked packet
+    fn pprint(&self) {
+        let status_str = self
+            .status
+            .iter()
+            .map(|x| match x {
+                PktStatus::Received => 'R',
+                PktStatus::NotReceived(_) => 'N',
+                PktStatus::Lost => 'l',
+                PktStatus::Retransmitted(_, _) => 't',
+            })
+            .collect::<String>();
+        println!("{} {}", self.range.0, status_str);
+    }
+
     /// Mark the status of a packet. By default, a packet is assumed to be `PktStatus::NotReceived`
     /// Both sender and receiver mark packets as received. Sender marks them as not received when
     /// sending packets and as lost on timeout. This module automatically marks them as lost if it
@@ -138,7 +153,7 @@ impl TrackRxPackets {
         // Extend our range at the right if necessary
         while seq_num >= self.range.1 {
             self.range.1 += 1;
-            self.status.push_back(PktStatus::NotReceieved(0));
+            self.status.push_back(PktStatus::NotReceived(0));
         }
 
         // Mark our packet
@@ -156,13 +171,13 @@ impl TrackRxPackets {
             for id in 0..pkt_id {
                 self.status[id] = match self.status[id] {
                     PktStatus::Received => PktStatus::Received,
-                    PktStatus::NotReceieved(i) => {
+                    PktStatus::NotReceived(i) => {
                         if i == 2 {
                             self.num_unreported_lost += 1;
                             self.num_lost += 1;
                             PktStatus::Lost
                         } else {
-                            PktStatus::NotReceieved(i + 1)
+                            PktStatus::NotReceived(i + 1)
                         }
                     }
                     PktStatus::Lost => PktStatus::Lost,
@@ -184,6 +199,7 @@ impl TrackRxPackets {
         }
 
         // We may shrink it if all packets on the left have been acked
+        println!("Front: {:?}", self.status.front());
         while let Some(PktStatus::Received) = self.status.front() {
             self.status.pop_front();
             self.range.0 += 1;
@@ -229,7 +245,7 @@ impl TrackRxPackets {
     /// Sequence number (not inclusive) till which all packets have been received
     fn received_till(&self) -> SeqNum {
         assert_ne!(
-            self.status.front().unwrap_or(&PktStatus::NotReceieved(0)),
+            self.status.front().unwrap_or(&PktStatus::NotReceived(0)),
             &PktStatus::Received
         );
         self.range.0
@@ -451,7 +467,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
 
     /// Transmit a packet now by returning an event that pushes a packet and a timeout for this
     /// transmission
-    fn tx_packet(&mut self, obj_id: NetObjId, now: Time) -> Vec<(Time, NetObjId, Action)> {
+    fn tx_packet(&mut self, _obj_id: NetObjId, now: Time) -> Vec<(Time, NetObjId, Action)> {
         // Which packet should we transmit next?
         let seq_num = if let Some(seq_num) = self.track_rx.lost_packets().1 {
             // Retransmit
@@ -461,7 +477,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
         } else {
             // Send a fresh packet
             self.track_rx
-                .mark_pkt(self.next_pkt, PktStatus::NotReceieved(0));
+                .mark_pkt(self.next_pkt, PktStatus::NotReceived(0));
             self.next_pkt += 1;
             self.next_pkt - 1
         };
@@ -475,9 +491,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
             ptype: TransportHeader::Data { seq_num },
         };
         self.cc.on_send(now, seq_num, pkt.uid);
-        vec![
-            (now, self.next, Action::Push(Rc::new(pkt))),
-        ]
+        vec![(now, self.next, Action::Push(Rc::new(pkt)))]
     }
 
     /// Schedule a transmission if appropriate
@@ -487,7 +501,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
         let rto_event = (
             now + self.rto.rto(),
             obj_id,
-            self.event_uid_map.new_event(TcpSenderEvent::Timeout(now))
+            self.event_uid_map.new_event(TcpSenderEvent::Timeout(now)),
         );
 
         // See if we should transmit packets
@@ -506,6 +520,8 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
                     // Schedule a transmission (uid = 0 denotes tx event)
                     time_to_send
                 };
+                // Update it here so the next packet gets transmitted an intersend time later
+                self.last_tx_time = time_to_send;
                 let event_id = self.event_uid_map.new_event(TcpSenderEvent::Transmit);
                 vec![(time_to_send, obj_id, event_id), rto_event]
             } else {
@@ -586,9 +602,11 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             // currently QUIC-like, where every packet has a unique id
             self.rto.report_rtt(rtt);
             // Our estimate of when a new packet is acked
-            if PktStatus::NotReceieved(0) == self.track_rx.get_pkt_status(*cum_ack - 1) {
+            if PktStatus::NotReceived(0) == self.track_rx.get_pkt_status(*cum_ack - 1) {
                 self.rto.report_fresh_ack();
             }
+
+            self.track_rx.pprint();
 
             self.tracer.log(
                 obj_id,
@@ -642,6 +660,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             TcpSenderEvent::Timeout(start_time) => {
                 if self.last_ack_time <= start_time {
                     // Mark all inflight packets as lost
+                    println!("Timeout: {}", now);
                     self.track_rx.mark_all_as_lost();
                     self.rto.report_timeout();
 

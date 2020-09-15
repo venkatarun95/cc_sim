@@ -4,11 +4,11 @@ use crate::transport::TransportHeader;
 
 use failure::{format_err, Error};
 use fnv::FnvHashMap;
+use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fmt;
 use std::rc::Rc;
-use serde::{Deserialize, Serialize};
 
 /// Time in microseconds
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]

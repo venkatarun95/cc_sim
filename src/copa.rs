@@ -33,11 +33,15 @@ impl CongestionControl for Copa {
 
         // Update the windows over which we compute history
         self.base_rtt.change_hist_period(
-            std::cmp::max(Time::from_secs(10), Time::from_micros(30 * self.base_rtt.get_srtt().micros())),
+            std::cmp::max(
+                Time::from_secs(10),
+                Time::from_micros(30 * self.base_rtt.get_srtt().micros()),
+            ),
             now,
         );
         let min_rtt = self.base_rtt.get_min_rtt();
-        self.standing_rtt.change_hist_period(Time::from_micros(2 * min_rtt.micros()), now);
+        self.standing_rtt
+            .change_hist_period(Time::from_micros(2 * min_rtt.micros()), now);
 
         // Compute the target window
         let queue_delay = self.standing_rtt.get_min_rtt() - self.base_rtt.get_min_rtt();
@@ -54,7 +58,7 @@ impl CongestionControl for Copa {
         }
     }
 
-    fn on_send(&mut self, now: Time, seq_num: SeqNum, _uid: PktId) {}
+    fn on_send(&mut self, _now: Time, _seq_num: SeqNum, _uid: PktId) {}
 
     fn on_timeout(&mut self) {
         self.cwnd = 2.;

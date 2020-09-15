@@ -478,8 +478,15 @@ impl CongestionControl for IncreaseBdpCC {
         if let Some((seq_num, sent_time)) = self.marker_pkt {
             if cum_ack > seq_num {
                 // Calculate BDP
-                self.bdp = self.num_acks_since_marker as f64 * self.min_rtt.secs() / (now - sent_time).secs();
-                println!("{} rtt {} min_rtt {} cwnd {}", self.bdp, now - sent_time, self.min_rtt, cwnd);
+                self.bdp = self.num_acks_since_marker as f64 * self.min_rtt.secs()
+                    / (now - sent_time).secs();
+                println!(
+                    "{} rtt {} min_rtt {} cwnd {}",
+                    self.bdp,
+                    now - sent_time,
+                    self.min_rtt,
+                    cwnd
+                );
                 self.marker_pkt = self.last_sent;
                 self.num_acks_since_marker = 0;
             }
