@@ -1,7 +1,9 @@
 mod base;
 mod cc;
 mod config;
+mod copa;
 mod random;
+mod rtt_window;
 mod simulator;
 mod topology;
 mod tracer;

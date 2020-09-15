@@ -1,6 +1,7 @@
 use crate::base::*;
 use crate::cc;
 use crate::config::{CCConfig, Config};
+use crate::copa;
 use crate::simulator::*;
 use crate::tracer::Tracer;
 use crate::transport::*;
@@ -41,6 +42,7 @@ pub fn create_topology<'a>(config: &'a Config, tracer: &'a Tracer) -> Result<Sch
                     Box::new(cc::StableLinearCC::new(alpha, k, group_config.delay))
                 }
                 CCConfig::IncreaseBdpCC => Box::new(cc::IncreaseBdpCC::default()),
+                CCConfig::Copa => Box::new(copa::Copa::default()),
             };
 
             // Decide everybody's ids

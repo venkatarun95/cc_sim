@@ -1,8 +1,8 @@
 //! Global configuration
+use crate::base::BufferSize;
+use crate::random::RandomVariable;
 use crate::simulator::Time;
 use crate::transport::TcpSenderTxLength;
-use crate::random::RandomVariable;
-use crate::base::BufferSize;
 
 // For random links.
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,7 @@ pub enum CCConfig {
     OscInstantCC { k: f64, omega: f64 },
     StableLinearCC { alpha: f64, k: f64 },
     IncreaseBdpCC,
+    Copa,
 }
 
 /// A group of senders
