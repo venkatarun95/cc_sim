@@ -7,29 +7,61 @@ use std::collections::VecDeque;
 #[allow(dead_code)]
 pub struct AIMD {
     cwnd: f64,
+    /// The last packet we sent
+    last_sent_pkt: SeqNum,
+    /// Sequence number of the last packet sent when we detected loss. We will only register a
+    /// fresh loss if the sequence number is after this
+    last_loss_sent_seq: SeqNum,
+    ss_thresh: Option<f64>,
+    /// Whether we are currently in exponential increase mode
+    slow_start: bool,
 }
 
 impl Default for AIMD {
     fn default() -> Self {
-        Self { cwnd: 4. }
+        Self {
+            cwnd: 4.,
+            last_sent_pkt: 0,
+            last_loss_sent_seq: 0,
+            ss_thresh: None,
+            slow_start: false,
+        }
     }
 }
 
 impl CongestionControl for AIMD {
-    fn on_ack(&mut self, _now: Time, _cum_ack: SeqNum, _ack_uid: PktId, _rtt: Time, num_lost: u64) {
+    fn on_ack(&mut self, _now: Time, cum_ack: SeqNum, _ack_uid: PktId, _rtt: Time, num_lost: u64) {
+        if self.cwnd + 1. >= self.ss_thresh.unwrap_or(std::f64::MAX) {
+            self.slow_start = false;
+        }
         if num_lost == 0 {
-            self.cwnd += 1. / self.cwnd;
+            if self.slow_start {
+                self.cwnd += 1.;
+            } else {
+                self.cwnd += 1. / self.cwnd;
+            }
         } else {
-            self.cwnd /= 2.;
-            if self.cwnd < 1. {
-                self.cwnd = 1.;
+            self.slow_start = false;
+            if self.last_loss_sent_seq < cum_ack {
+                println!(
+                    "Decreasing due to loss: {} {}",
+                    self.last_loss_sent_seq, cum_ack
+                );
+                self.cwnd /= 2.;
+                if self.cwnd < 1. {
+                    self.cwnd = 1.;
+                }
+                self.last_loss_sent_seq = cum_ack
             }
         }
     }
 
-    fn on_send(&mut self, _now: Time, _seq_num: SeqNum, _uid: PktId) {}
+    fn on_send(&mut self, _now: Time, seq_num: SeqNum, _uid: PktId) {
+        self.last_sent_pkt = seq_num;
+    }
 
     fn on_timeout(&mut self) {
+        self.ss_thresh = Some(self.cwnd / 2.);
         self.cwnd = 1.;
     }
 
