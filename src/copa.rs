@@ -39,13 +39,17 @@ impl CongestionControl for Copa {
             ),
             now,
         );
-        let min_rtt = self.base_rtt.get_min_rtt();
+        let min_rtt = self.base_rtt.get_min_rtt().unwrap();
         self.standing_rtt
             .change_hist_period(Time::from_micros(2 * min_rtt.micros()), now);
 
+        // Extract into local variables for convenience
+        let standing_rtt = self.standing_rtt.get_min_rtt().unwrap();
+        let base_rtt = self.base_rtt.get_min_rtt().unwrap();
+
         // Compute the target window
-        let queue_delay = self.standing_rtt.get_min_rtt() - self.base_rtt.get_min_rtt();
-        let target_cwnd = self.base_rtt.get_min_rtt().secs() / (self.delta * queue_delay.secs());
+        let queue_delay = standing_rtt - base_rtt;
+        let target_cwnd = base_rtt.secs() / (self.delta * queue_delay.secs());
         //println!("now {} cwnd {} queue {} target {}", now, self.cwnd, queue_delay, target_cwnd);
         if self.cwnd < target_cwnd {
             self.cwnd += 1. / (self.delta * self.cwnd);

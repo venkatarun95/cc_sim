@@ -63,8 +63,12 @@ impl RTTWindow {
 
     /// Minimum RTT in hist_period (unless `hist_period` recently increased, in which case only
     /// data from the point of change will be available)
-    pub fn get_min_rtt(&self) -> Time {
-        self.min_rtt
+    pub fn get_min_rtt(&self) -> Option<Time> {
+        if self.min_rtt == Time::MAX {
+            None
+        } else {
+            Some(self.min_rtt)
+        }
     }
 
     pub fn get_srtt(&self) -> Time {
