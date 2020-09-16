@@ -37,12 +37,14 @@ pub enum LinkTraceConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum CCConfig {
+    Const { cwnd: u64, intersend: u64 },
     AIMD,
     InstantCC,
     OscInstantCC { k: f64, omega: f64 },
     StableLinearCC { alpha: f64, k: f64 },
     IncreaseBdpCC,
     Copa,
+    Copa2,
 }
 
 /// A group of senders

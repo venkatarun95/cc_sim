@@ -4,7 +4,34 @@ use crate::transport::CongestionControl;
 use std::cmp::{max, min};
 use std::collections::VecDeque;
 
-#[allow(dead_code)]
+/// Constant cwnd and intersend time
+pub struct Const {
+    cwnd: u64,
+    intersend: Time,
+}
+
+impl Const {
+    pub fn new(cwnd: u64, intersend: Time) -> Self {
+        Self { cwnd, intersend }
+    }
+}
+
+impl CongestionControl for Const {
+    fn on_ack(&mut self, _: Time, _: SeqNum, _: PktId, _: Time, _: u64) {}
+
+    fn on_send(&mut self, _: Time, _: SeqNum, _: PktId) {}
+
+    fn on_timeout(&mut self) {}
+
+    fn get_cwnd(&mut self) -> u64 {
+        self.cwnd
+    }
+
+    fn get_intersend_time(&mut self) -> Time {
+        self.intersend
+    }
+}
+
 pub struct AIMD {
     cwnd: f64,
     /// The last packet we sent
