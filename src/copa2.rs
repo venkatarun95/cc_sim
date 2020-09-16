@@ -29,6 +29,14 @@ pub struct Copa2 {
     rtt_long: RTTWindow,
     /// The current cwnd. Pacing is set so it (nearly) matches this cwnd
     cwnd: f64,
+    /// Set after we have reduced cwnd due to loss. In this case we only increase additively (so it
+    /// would mimic AIMD on short buffers). Set to `None` again if andwhen we reach oscillation
+    /// mode. When set, it stores the current time + RTT. To prevent successive decreases on cwnd,
+    /// we react again to loss only after 1 RTT.
+    ///
+    ///TODO(venkat): change this so we react only to packets sent after cwnd reduction. This would
+    /// require changing the `CongestionControl` interface though :/
+    loss_mode: Option<Time>,
     /// Total number of packets (retransmitted or no, out-of-order or no)
     num_pkts_acked: u64,
     /// Store information on every packet sent
@@ -47,6 +55,7 @@ impl Copa2 {
             rtt_med: RTTWindow::new(Time::from_secs(4)),
             rtt_long: RTTWindow::new(Time::from_secs(4)),
             cwnd: 2.,
+            loss_mode: None,
             num_pkts_acked: 0,
             pkt_data: HashMap::new(),
         }
@@ -75,6 +84,18 @@ impl CongestionControl for Copa2 {
         let rtt_long = self.rtt_long.get_min_rtt().unwrap();
         let srtt = self.rtt_long.get_srtt();
 
+        // React to loss if necessary
+        if num_lost > 0 {
+            if self.loss_mode.is_none() || self.loss_mode.unwrap() < now {
+                self.cwnd /= 2.;
+                if self.cwnd < 2. {
+                    self.cwnd = 2.;
+                }
+                self.loss_mode = Some(now + srtt);
+                return;
+            }
+        }
+
         // Retrieve packet data
         let pkt_data = self.pkt_data.remove(&ack_uid).unwrap();
         // Calculate the estimated BDP (in pkts)
@@ -83,13 +104,18 @@ impl CongestionControl for Copa2 {
         // println!("Logg1 {} {} {}", now.millis(), bdp_est, self.cwnd);
 
         // The core rules
-        if rtt_short.secs() < 2. * rtt_long.secs()
-        //&& (self.cwnd as f64) < bdp_est * 2.
-        {
+        if rtt_short.secs() < 2. * rtt_long.secs() {
             // RTT is too low. We should be in the doubling phase now. Add a 1 so it definitely
             // passes the 2x stage
-            self.cwnd = bdp_est * 2. + 1.;
+            if self.loss_mode.is_some() || self.cwnd as f64 > bdp_est * 2. {
+                // Well, can't increase using bdp_est. Let's increase in this way instead
+                self.cwnd += self.alpha / self.cwnd;
+            } else {
+                self.cwnd = bdp_est * 2. + 1.;
+            }
         } else {
+            self.loss_mode = None;
+
             // Oscillating mode
             let base_delay =
                 Time::from_micros(std::cmp::max(2 * rtt_long.micros(), rtt_med.micros()));
@@ -97,10 +123,11 @@ impl CongestionControl for Copa2 {
             let target_rate = self.alpha / delay.secs();
             let cur_rate = self.cwnd as f64 / srtt.secs();
             // println!(
-            //     "Logg2 {} {} {} {} {} {} {}",
+            //     "Logg2 {} {} {} {} {} {} {} {}",
             //     now.millis(),
-            //     self.rtt_short.get_min_rtt().millis(),
-            //     self.rtt_med.get_min_rtt().millis(),
+            //     self.cwnd,
+            //     rtt_short.millis(),
+            //     rtt_med.millis(),
             //     base_delay.millis(),
             //     target_rate,
             //     cur_rate,
