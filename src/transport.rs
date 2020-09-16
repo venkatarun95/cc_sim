@@ -124,6 +124,7 @@ impl TrackRxPackets {
     }
 
     /// Pretty print the status of each unacked packet
+    #[allow(dead_code)]
     fn pprint(&self) {
         let status_str = self
             .status
@@ -177,6 +178,7 @@ impl TrackRxPackets {
                             self.num_lost += 1;
                             PktStatus::Lost
                         } else {
+                            assert!(i < 2);
                             PktStatus::NotReceived(i + 1)
                         }
                     }
@@ -199,7 +201,6 @@ impl TrackRxPackets {
         }
 
         // We may shrink it if all packets on the left have been acked
-        println!("Front: {:?}", self.status.front());
         while let Some(PktStatus::Received) = self.status.front() {
             self.status.pop_front();
             self.range.0 += 1;
@@ -244,10 +245,7 @@ impl TrackRxPackets {
 
     /// Sequence number (not inclusive) till which all packets have been received
     fn received_till(&self) -> SeqNum {
-        assert_ne!(
-            self.status.front().unwrap_or(&PktStatus::NotReceived(0)),
-            &PktStatus::Received
-        );
+        assert_ne!(self.status.front(), Some(&PktStatus::Received));
         self.range.0
     }
 
@@ -340,9 +338,11 @@ impl TcpRto {
                 + 1. / 4. * (self.srtt.micros() as f64 - rtt.micros() as f64).abs())
                 as u64,
         );
-        self.srtt = if self.srtt.micros() == 0 {
-            // First measurement?
-            Time::from_micros(rtt.micros() / 2)
+        self.srtt = if self.srtt == Time::from_secs(1) {
+            // First measurement
+            // The RFC asks us to set rttvar thusly
+            self.rttvar = Time::from_micros(rtt.micros() / 2);
+            rtt
         } else {
             Time::from_micros(
                 ((1. - 1. / 8.) * self.srtt.micros() as f64 + rtt.micros() as f64 / 8.) as u64,
@@ -367,6 +367,8 @@ impl TcpRto {
         let rto = rto.micros() * self.backoff;
         // Cap the RTO at 60 seconds
         let rto = std::cmp::min(60_000_000, rto);
+        // RTO should be at least 1 second
+        let rto = std::cmp::max(1_000_000, rto);
         Time::from_micros(rto)
     }
 }
@@ -412,9 +414,9 @@ pub struct TcpSender<'a, C: CongestionControl + 'static> {
 }
 
 impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
-    /// `next` is the next hop to which packets should be forwarded. `addr` is the destination the
-    /// packet should be sent to.  `start_time` and `end_time` are the times at which the flow should
-    /// start and end.
+    /// `next` is the next hop to which packets should be forwarded. `dest` is the destination the
+    /// packet should be sent to.  `addr` is our (the sender's) address `start_time` is the time at
+    /// which the flow should start. `tx_length` is the duration/size of the flow
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         next: NetObjId,
@@ -465,8 +467,7 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
         }
     }
 
-    /// Transmit a packet now by returning an event that pushes a packet and a timeout for this
-    /// transmission
+    /// Transmit a packet now by returning an event that pushes a packet
     fn tx_packet(&mut self, _obj_id: NetObjId, now: Time) -> Vec<(Time, NetObjId, Action)> {
         // Which packet should we transmit next?
         let seq_num = if let Some(seq_num) = self.track_rx.lost_packets().1 {
@@ -517,11 +518,12 @@ impl<'a, C: CongestionControl + 'static> TcpSender<'a, C> {
                     // Transmit now
                     now
                 } else {
-                    // Schedule a transmission (uid = 0 denotes tx event)
+                    // Schedule a transmission for later
                     time_to_send
                 };
                 // Update it here so the next packet gets transmitted an intersend time later
                 self.last_tx_time = time_to_send;
+                self.tx_scheduled = true;
                 let event_id = self.event_uid_map.new_event(TcpSenderEvent::Transmit);
                 vec![(time_to_send, obj_id, event_id), rto_event]
             } else {
@@ -565,7 +567,7 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             ack_uid,
         } = &pkt.ptype
         {
-            assert!(self.next_pkt > self.track_rx.received_till());
+            assert!(self.next_pkt >= self.track_rx.received_till());
             assert!(*cum_ack <= self.next_pkt);
             if self.has_ended(now) {
                 return Ok(Vec::new());
@@ -605,8 +607,6 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             if PktStatus::NotReceived(0) == self.track_rx.get_pkt_status(*cum_ack - 1) {
                 self.rto.report_fresh_ack();
             }
-
-            self.track_rx.pprint();
 
             self.tracer.log(
                 obj_id,
