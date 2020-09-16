@@ -282,13 +282,13 @@ impl TrackRxPackets {
             if let Some(start) = block_start {
                 // End the block?
                 if self.status[i] != PktStatus::Received {
-                    sack.push((i as SeqNum, start as SeqNum));
+                    sack.push(((i + 1) as SeqNum, start as SeqNum));
                     block_start = None;
                 }
             } else {
                 // Start the block?
                 if self.status[i] == PktStatus::Received {
-                    block_start = Some(i);
+                    block_start = Some(i + 1);
                 }
             }
         }
