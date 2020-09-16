@@ -15,7 +15,7 @@ use std::rc::Rc;
 pub struct Time(u64);
 
 /// Unique packet ID
-#[derive(Copy, Clone, Debug, Hash)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PktId(u64);
 
 /// Used to allocate fresh, uniqe ids to packets

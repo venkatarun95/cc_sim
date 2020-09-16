@@ -2,6 +2,7 @@ mod base;
 mod cc;
 mod config;
 mod copa;
+mod copa2;
 mod random;
 mod rtt_window;
 mod simulator;
