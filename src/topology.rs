@@ -10,8 +10,8 @@ use crate::transport::*;
 use failure::Error;
 
 /// Creates topology specified in Config and returns a Scheduler (with appropriate NetObjects). The
-/// base topology is as follows (tcp_sender -> delay) -> link -> router --..--> ackers --> back to
-/// corresponding senders
+/// base topology is as follows (tcp_sender -> delay) -> link -> router --..--> ackers -->
+/// aggregator --> back to corresponding senders
 pub fn create_topology<'a>(config: &'a Config, tracer: &'a Tracer) -> Result<Scheduler<'a>, Error> {
     let mut sched = Scheduler::default();
 
@@ -70,11 +70,13 @@ pub fn create_topology<'a>(config: &'a Config, tracer: &'a Tracer) -> Result<Sch
                 &tracer,
                 config,
             );
-            let delay = Delay::new(group_config.delay, agg_id);
-            let aggregator = Aggregator::new(group_config.agg_intersend, link_id);
+            let delay = Delay::new(group_config.delay, link_id);
 
             // Create the acker
-            let acker = Acker::new(acker_addr, tcp_sender_id);
+            let acker = Acker::new(acker_addr, agg_id);
+
+            // Add the aggregator after the acker
+            let aggregator = Aggregator::new(group_config.agg_intersend, tcp_sender_id);
 
             // Add routes
             let port = router.add_port(acker_id);
