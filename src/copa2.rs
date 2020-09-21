@@ -101,14 +101,16 @@ impl CongestionControl for Copa2 {
         // Calculate the estimated BDP (in pkts)
         let bdp_est = (self.num_pkts_acked - pkt_data.num_pkts_acked) as f64 * rtt_long.secs()
             / (now - pkt_data.sent_time).secs();
-        // println!("Logg1 {} {} {}", now.millis(), bdp_est, self.cwnd);
 
         // The core rules
-        if rtt_short.secs() < 2. * rtt_long.secs() {
+        if (self.cwnd as f64) < bdp_est * 2. {
             // RTT is too low. We should be in the doubling phase now. Add a 1 so it definitely
             // passes the 2x stage
-            if self.loss_mode.is_some() || self.cwnd as f64 > bdp_est * 2. {
-                // Well, can't increase using bdp_est. Let's increase in this way instead
+            if self.loss_mode.is_some() {
+                // When in loss mode, increase conservatively. We can do better by staying just
+                // below the buffer threshold (there is a simple way of doing this by playing with
+                // how much base delay we maintain). However, I am sticking to this simpler version
+                // for now
                 self.cwnd += self.alpha / self.cwnd;
             } else {
                 self.cwnd = bdp_est * 2. + 1.;
@@ -119,20 +121,14 @@ impl CongestionControl for Copa2 {
             // Oscillating mode
             let base_delay =
                 Time::from_micros(std::cmp::max(2 * rtt_long.micros(), rtt_med.micros()));
-            let delay = rtt_short - base_delay;
-            let target_rate = self.alpha / delay.secs();
+            let delay = rtt_short.secs() - base_delay.secs();
+            let target_rate = if delay > 0. {
+                self.alpha / delay
+            } else {
+                std::f64::INFINITY
+            };
             let cur_rate = self.cwnd as f64 / srtt.secs();
-            // println!(
-            //     "Logg2 {} {} {} {} {} {} {} {}",
-            //     now.millis(),
-            //     self.cwnd,
-            //     rtt_short.millis(),
-            //     rtt_med.millis(),
-            //     base_delay.millis(),
-            //     target_rate,
-            //     cur_rate,
-            //     bdp_est
-            // );
+
             if cur_rate < target_rate {
                 self.cwnd += self.alpha / self.cwnd;
             } else {
@@ -162,12 +158,12 @@ impl CongestionControl for Copa2 {
     }
 
     fn get_intersend_time(&mut self) -> Time {
-        // Time::from_micros(
-        //     (self.pacing_factor * self.rtt_short.get_srtt().micros() as f64 / self.cwnd) as u64,
-        // )
         Time::from_micros(
-            (self.rtt_long.get_min_rtt().unwrap_or(Time::ZERO).micros() as f64 / self.cwnd) as u64,
+            (self.pacing_factor * self.rtt_short.get_srtt().micros() as f64 / self.cwnd) as u64,
         )
+        // Time::from_micros(
+        //     (self.rtt_long.get_min_rtt().unwrap_or(Time::ZERO).micros() as f64 / self.cwnd) as u64,
+        // )
         // Time::ZERO
     }
 }
