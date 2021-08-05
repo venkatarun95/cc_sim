@@ -497,9 +497,7 @@ impl<'a> Tracer<'a> {
             let writer = std::io::BufWriter::new(std::fs::File::create(fname)?);
             serde_json::to_writer(writer, &stats_ser)?;
         } else {
-            let stdout = std::io::stdout();
-            let writer = stdout.lock();
-            serde_json::to_writer(writer, &stats_ser)?;
+            println!("{}", serde_json::to_string_pretty(&stats_ser)?);
         };
 
         Ok(())

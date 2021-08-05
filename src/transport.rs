@@ -660,7 +660,6 @@ impl<'a, C: CongestionControl + 'static> NetObj for TcpSender<'a, C> {
             TcpSenderEvent::Timeout(start_time) => {
                 if self.last_ack_time <= start_time {
                     // Mark all inflight packets as lost
-                    println!("Timeout: {}", now);
                     self.track_rx.mark_all_as_lost();
                     self.rto.report_timeout();
 

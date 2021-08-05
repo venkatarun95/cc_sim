@@ -79,6 +79,14 @@ impl std::ops::Sub for Time {
     }
 }
 
+impl std::ops::Mul<u64> for Time {
+    type Output = Self;
+
+    fn mul(self, other: u64) -> Self {
+        Time(self.0 * other)
+    }
+}
+
 impl Time {
     pub const MAX: Time = Time(std::u64::MAX);
     pub const ZERO: Time = Time(0);
